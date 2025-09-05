@@ -45,7 +45,7 @@ lint:
 
 # Testing
 test:
-	$(VENV)/bin/pytest tests/test_core_functionality.py::TestConfigurationSettings tests/test_core_functionality.py::TestDatabaseSchema tests/test_core_functionality.py::TestDataValidationLogic tests/test_core_functionality.py::TestDataFormats tests/test_core_functionality.py::TestEnvironmentConfiguration tests/test_core_functionality.py::TestIntegrationReadiness tests/test_data_collectors.py::TestMarketDataCollector::test_init tests/test_data_collectors.py::TestMarketDataCollector::test_collect_real_time_data_dummy_mode tests/test_data_collectors.py::TestNewsCollector::test_collect_financial_news_dummy_mode -v
+	$(VENV)/bin/pytest tests/test_core_functionality.py::TestConfigurationSettings tests/test_core_functionality.py::TestDatabaseSchema tests/test_core_functionality.py::TestDataValidationLogic tests/test_core_functionality.py::TestDataFormats tests/test_core_functionality.py::TestEnvironmentConfiguration tests/test_core_functionality.py::TestIntegrationReadiness tests/test_data_collectors.py::TestMarketDataCollector::test_init tests/test_data_collectors.py::TestMarketDataCollector::test_collect_real_time_data_dummy_mode tests/test_data_collectors.py::TestNewsCollector::test_collect_financial_news_dummy_mode tests/test_strategic_collectors.py::TestFundamentalDataCollector::test_init tests/test_strategic_collectors.py::TestFundamentalDataCollector::test_collect_weekly_fundamentals_dummy_mode tests/test_strategic_collectors.py::TestVolatilityMonitor::test_init tests/test_strategic_collectors.py::TestVolatilityMonitor::test_check_market_volatility_dummy_mode -v
 
 test-all:
 	$(VENV)/bin/pytest tests/ -v
