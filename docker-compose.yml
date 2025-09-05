@@ -1,0 +1,213 @@
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: trading_advisor
+      POSTGRES_USER: trader
+      POSTGRES_PASSWORD: trader_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db-simple.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./src:/app/src
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trader -d trading_advisor"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Airflow Postgres Database
+  airflow-postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: airflow
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow_password
+    volumes:
+      - airflow_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Airflow Init
+  airflow-init:
+    image: apache/airflow:2.7.3-python3.11
+    user: "50000:0"  # Use airflow user with root group
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow_password@airflow-postgres:5432/airflow
+      AIRFLOW__CORE__FERNET_KEY: "81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs="
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      PYTHONPATH: "/opt/airflow:/opt/airflow/src"
+      # Required by src.config
+      POSTGRES_DB: trading_advisor
+      POSTGRES_USER: trader
+      POSTGRES_PASSWORD: trader_password
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      DATABASE_URL: postgresql://trader:trader_password@postgres:5432/trading_advisor
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: secret_key_here
+      DEBUG: "True"
+      LOG_LEVEL: INFO
+      AIRFLOW__WEBSERVER__SECRET_KEY: "secret_key_here"
+    volumes:
+      - ./src/airflow_dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - airflow_logs:/opt/airflow/logs
+      - ./requirements-airflow.txt:/opt/airflow/requirements-airflow.txt
+    depends_on:
+      airflow-postgres:
+        condition: service_healthy
+    command: >
+      bash -c "
+        pip install -r /opt/airflow/requirements-airflow.txt &&
+        mkdir -p /opt/airflow/logs/scheduler &&
+        airflow db init &&
+        airflow users create --username admin --firstname Admin --lastname User --role Admin --email admin@example.com --password admin
+      "
+
+  # Airflow Webserver
+  airflow-webserver:
+    image: apache/airflow:2.7.3-python3.11
+    user: "50000:0"  # Use airflow user with root group
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow_password@airflow-postgres:5432/airflow
+      AIRFLOW__CORE__FERNET_KEY: "81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs="
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      PYTHONPATH: "/opt/airflow:/opt/airflow/src"
+      # Required by src.config
+      POSTGRES_DB: trading_advisor
+      POSTGRES_USER: trader
+      POSTGRES_PASSWORD: trader_password
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      DATABASE_URL: postgresql://trader:trader_password@postgres:5432/trading_advisor
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: secret_key_here
+      DEBUG: "True"
+      LOG_LEVEL: INFO
+      AIRFLOW__WEBSERVER__SECRET_KEY: "secret_key_here"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./src/airflow_dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - airflow_logs:/opt/airflow/logs
+      - ./requirements-airflow.txt:/opt/airflow/requirements-airflow.txt
+    depends_on:
+      - airflow-init
+      - airflow-postgres
+    command: >
+      bash -c "
+        pip install -r /opt/airflow/requirements-airflow.txt &&
+        airflow webserver
+      "
+
+  # Airflow Scheduler
+  airflow-scheduler:
+    image: apache/airflow:2.7.3-python3.11
+    user: "50000:0"  # Use airflow user with root group
+    environment:
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow_password@airflow-postgres:5432/airflow
+      AIRFLOW__CORE__FERNET_KEY: "81HqDtbqAywKSOumSha3BhWNOdQ26slT6K0YaZeZyPs="
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/dags
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      PYTHONPATH: "/opt/airflow:/opt/airflow/src"
+      # Required by src.config
+      POSTGRES_DB: trading_advisor
+      POSTGRES_USER: trader
+      POSTGRES_PASSWORD: trader_password
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      DATABASE_URL: postgresql://trader:trader_password@postgres:5432/trading_advisor
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: secret_key_here
+      DEBUG: "True"
+      LOG_LEVEL: INFO
+    volumes:
+      - ./src/airflow_dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - airflow_logs:/opt/airflow/logs
+      - ./requirements-airflow.txt:/opt/airflow/requirements-airflow.txt
+    depends_on:
+      - airflow-init
+      - airflow-postgres
+    command: >
+      bash -c "
+        pip install -r /opt/airflow/requirements-airflow.txt &&
+        airflow scheduler
+      "
+
+  # FastAPI Application
+  api:
+    build:
+      context: .
+      target: fastapi
+    environment:
+      DATABASE_URL: postgresql://trader:trader_password@postgres:5432/trading_advisor
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: "your_secret_key_here"
+      DEBUG: "true"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./.env:/app/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # Test Runner Service
+  test:
+    build:
+      context: .
+      target: fastapi
+    environment:
+      DATABASE_URL: postgresql://trader:trader_password@postgres:5432/trading_advisor
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: "test_secret_key"
+      DEBUG: "true"
+      PYTHONPATH: "/app"
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./.env:/app/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: tail -f /dev/null  # Keep container running
+
+volumes:
+  postgres_data:
+  redis_data:
+  airflow_postgres_data:
+  airflow_logs:

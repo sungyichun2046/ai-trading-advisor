@@ -1,0 +1,30 @@
+FROM apache/airflow:2.7.3-python3.11
+
+# Switch to root to install additional dependencies
+USER root
+
+# Install system dependencies if needed
+RUN apt-get update && apt-get install -y \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Switch back to airflow user
+USER airflow
+
+# Copy and install additional Python dependencies
+COPY requirements-airflow.txt /tmp/
+RUN pip install --no-cache-dir -r /tmp/requirements-airflow.txt
+
+# Copy source code to the container
+COPY src/ /opt/airflow/src/
+
+# Copy DAGs (they need to reference src properly)
+COPY src/airflow_dags/ /opt/airflow/dags/
+
+# Set proper permissions
+USER root
+RUN chown -R airflow:root /opt/airflow/
+USER airflow
+
+# Set Python path so 'src' module can be imported
+ENV PYTHONPATH="/opt/airflow:/opt/airflow/src:${PYTHONPATH}"

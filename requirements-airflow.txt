@@ -1,0 +1,16 @@
+
+# Airflow 2.7 with compatible dependencies
+apache-airflow[postgres]==2.7.3
+Flask-Session==0.5.0
+
+# Database and cache
+psycopg2-binary==2.9.9
+redis==5.0.1
+
+# Configuration and validation (needed by src.config)
+python-dotenv==1.0.0
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# Logging
+loguru==0.7.2
