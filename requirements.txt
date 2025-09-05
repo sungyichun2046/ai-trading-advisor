@@ -28,4 +28,10 @@ polygon-api-client==1.12.5
 requests==2.31.0
 aiohttp==3.9.1
 
+# News & Sentiment Analysis (lightweight alternatives)
+newsapi-python==0.2.7
+textblob==0.17.1
+# transformers==4.36.0  # Heavy dependency - uncomment for production
+# torch==2.1.0          # Heavy dependency - uncomment for production
+
 # Note: Airflow dependencies are in requirements-airflow.txt

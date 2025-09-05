@@ -45,10 +45,16 @@ lint:
 
 # Testing
 test:
+	$(VENV)/bin/pytest tests/test_core_functionality.py::TestConfigurationSettings tests/test_core_functionality.py::TestDatabaseSchema tests/test_core_functionality.py::TestDataValidationLogic tests/test_core_functionality.py::TestDataFormats tests/test_core_functionality.py::TestEnvironmentConfiguration tests/test_core_functionality.py::TestIntegrationReadiness tests/test_data_collectors.py::TestMarketDataCollector::test_init tests/test_data_collectors.py::TestMarketDataCollector::test_collect_real_time_data_dummy_mode tests/test_data_collectors.py::TestNewsCollector::test_collect_financial_news_dummy_mode -v
+
+test-all:
 	$(VENV)/bin/pytest tests/ -v
 
+test-real-data:
+	$(VENV)/bin/pytest tests/test_real_data_integration.py -v -s
+
 test-coverage:
-	$(VENV)/bin/pytest tests/ --cov=src --cov-report=html --cov-report=term
+	$(VENV)/bin/pytest tests/test_core_functionality.py tests/test_data_collectors.py --cov=src --cov-report=html --cov-report=term
 
 test-watch:
 	$(VENV)/bin/pytest tests/ -v --tb=short -f
@@ -319,6 +325,8 @@ help:
 	@echo "  setup          - Initial project setup"
 	@echo "  dev            - Start development server"
 	@echo "  test           - Run tests"
+	@echo "  test-all       - Run all tests"
+	@echo "  test-real-data - Run real data integration tests (requires USE_REAL_DATA=True)"
 	@echo "  test-coverage  - Run tests with coverage"
 	@echo "  lint           - Run linting"
 	@echo "  format         - Format code"

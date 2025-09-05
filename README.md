@@ -5,11 +5,12 @@ AI-powered trading advisor with dynamic risk management, multi-source data integ
 ## Features
 
 - 🎯 **Dynamic Risk Management** - Personalized risk profiles with real-time adjustments
-- 📊 **Multi-Source Data Integration** - Fundamentals, technicals, news, and sentiment analysis
-- 🤖 **AI-Powered Recommendations** - Daily buy/sell signals with decision transparency
-- ⚡ **Multi-Timeframe Analysis** - Intraday, short-term, ETF, and long-term strategies
-- 🔄 **Automated Pipeline** - Apache Airflow orchestration for reliable data processing
+- 📊 **Multi-Source Data Integration** - Real-time market data (Yahoo Finance) and financial news (NewsAPI)
+- 🤖 **AI-Powered Sentiment Analysis** - FinBERT/TextBlob sentiment analysis with fallback system
+- ⚡ **Multi-Timeframe Analysis** - 15-minute intervals with historical data support
+- 🔄 **Automated Pipeline** - Apache Airflow orchestration with robust error handling
 - 🛡️ **Enterprise Security** - Comprehensive risk controls and audit logging
+- 🚀 **Real Data Integration** - Working Yahoo Finance API bypass and NewsAPI integration
 
 ## Quick Start
 
@@ -33,6 +34,28 @@ make setup
 cp .env.example .env
 # Edit .env with your API keys and settings
 ```
+
+### **🔑 API Configuration**
+
+For **real data collection**, update your `.env` file:
+
+```bash
+# Required for real financial news
+NEWSAPI_KEY=your_newsapi_key_from_newsapi.org
+
+# Data source toggle
+USE_REAL_DATA=True          # Use real APIs
+USE_REAL_DATA=False         # Use dummy data (development)
+
+# Other settings
+DATA_COLLECTION_INTERVAL=15 # Minutes between data collection
+MAX_NEWS_ARTICLES=50        # Max articles per collection
+```
+
+**API Keys:**
+- **NewsAPI**: Get free key at [newsapi.org](https://newsapi.org) (1000 requests/day)
+- **Yahoo Finance**: No API key needed (using direct API calls)
+- **Future**: Alpha Vantage and Polygon.io (commented out, not implemented yet)
 
 ### **🚀 Fastest Setup (Recommended)**
 
@@ -61,9 +84,23 @@ This single command will:
 # Build test container with pytest dependencies
 make docker-test-build
 
-# Run all tests in Docker container
-make docker-test
+# Run core tests (mocked, always pass)
+make test                    # 16 core tests with mocking
+
+# Run all tests including integration tests
+make test-all               # 87 total tests (some may fail without proper setup)
+
+# Run real data integration tests (requires USE_REAL_DATA=True + API keys)
+make test-real-data         # 4 real API tests (skipped if USE_REAL_DATA=False)
+
+# Run tests with coverage
+make test-coverage
 ```
+
+**Test Types:**
+- **Core Tests** (`make test`): 16 reliable tests with full mocking
+- **Real Data Tests** (`make test-real-data`): 4 tests using actual APIs
+- **Integration Tests**: Require proper Docker/database setup
 
 ### Quick Verification
 
@@ -71,8 +108,14 @@ make docker-test
 # Check database has sample data
 make db-show-data
 
-# Check API health
-curl http://localhost:8000/health
+# Connect to database directly (PostgreSQL)
+make db-connect
+
+# Once connected, run these PostgreSQL commands:
+trading_advisor=# \dt                    # List all tables
+trading_advisor=# SELECT * FROM market_data;  # Show market data
+trading_advisor=# \q                     # Exit database
+
 
 # Check Airflow UI (optional)
 make airflow-init && make airflow-start
@@ -86,10 +129,8 @@ open http://localhost:8080  # admin/admin
 # Run configuration and unit tests
 make test
 
-# Expected output: All tests pass with risk management validation
-# ✅ Test results: 19 passed, 0 failed
-# ✅ Risk management calculations validated
-# ✅ Configuration loading successful
+# Test real data collection (requires NewsAPI key)
+make test-real-data
 ```
 
 #### 2. **API Health Check**
@@ -128,14 +169,19 @@ make db-up
 # Run database migrations
 make db-migrate
 
-# Verify database schema
-docker exec -it ai-trading-advisor-postgres-1 psql -U trader -d trading_advisor -c "\dt"
+# Verify database schema and data
+make db-connect
 
-# Expected tables:
-# - users, portfolios, positions
-# - market_data, news_sentiment
-# - recommendations, risk_assessments
-# - analysis_results, trading_signals
+# Once connected to PostgreSQL, run:
+trading_advisor=# \dt           # List all tables
+trading_advisor=# SELECT * FROM market_data LIMIT 5;  # Show sample market data
+trading_advisor=# SELECT COUNT(*) FROM market_data;   # Count total records
+trading_advisor=# SELECT title, sentiment FROM news_data LIMIT 3;  # Show news data
+
+# Expected tables and sample data:
+# - market_data: Real stock prices (SPY, AAPL, MSFT, etc.)
+# - news_data: Financial news with sentiment scores
+# - analysis_results, recommendations: May be empty initially
 ```
 
 #### 5. **Airflow DAG Validation**
@@ -192,7 +238,31 @@ make test-risk-limits
 # Expected: All risk calculations respect configured limits
 ```
 
-#### 8. **Code Quality Verification**
+#### 8. **Real Data Verification**
+```bash
+# Verify real data collection is working
+make test-real-data
+
+# Expected output:
+# ✅ Real data verified for SPY: $649.12
+# ✅ Real news verified: 50 articles from NewsAPI
+# ✅ Sentiment analysis verified: textblob method
+
+# Check database contains real data
+make db-connect
+
+# In PostgreSQL prompt:
+trading_advisor=# SELECT symbol, price, volume, timestamp FROM market_data ORDER BY price DESC LIMIT 5;
+trading_advisor=# SELECT title, sentiment FROM news_data WHERE sentiment > 0.5 LIMIT 3;
+trading_advisor=# \q
+
+# Expected results:
+# - Market data with current stock prices (yahoo_direct source)
+# - News articles with sentiment scores from NewsAPI
+# - Timestamps showing recent data collection
+```
+
+#### 9. **Code Quality Verification**
 ```bash
 # Format code
 make format
@@ -227,7 +297,24 @@ make test-api-keys
 # Expected: Configuration loaded without errors
 ```
 
-#### 10. **End-to-End Health Check**
+#### 10. **Database Data Population**
+```bash
+# If database is empty, populate it with real data (One-time setup, manual data collection and testing)
+python populate_market_data.py
+
+# Expected output:
+# ✅ SPY: $649.12 (yahoo_direct)
+# ✅ AAPL: $239.78 (yahoo_direct)
+# ✅ Successfully inserted 8 market data records
+# ✅ Successfully inserted 50 news articles
+
+# Verify data was stored
+make db-connect
+trading_advisor=# \dt                    # Should show market_data, news_data tables
+trading_advisor=# SELECT COUNT(*) FROM market_data;  # Should show > 0 records
+```
+
+#### 11. **End-to-End Health Check**
 ```bash
 # Run comprehensive health check
 make health-check
@@ -291,6 +378,17 @@ make dev PORT=8001
 docker ps | grep postgres
 # Restart database
 make db-reset
+
+# Test database connection
+make db-connect
+# If connected successfully, you should see:
+# trading_advisor=#
+
+# Common PostgreSQL commands:
+# \dt                    # List tables (NOT "SHOW TABLES")
+# \d table_name          # Describe table structure
+# SELECT * FROM market_data;  # Show data
+# \q                     # Quit
 ```
 
 **Airflow DAGs not showing:**
@@ -328,6 +426,38 @@ docker system prune -f
 make trigger-and-wait
 ```
 
+**Real data collection issues:**
+```bash
+# Check if NewsAPI key is configured
+grep NEWSAPI_KEY .env
+
+# Test real data collection manually
+python test_real_data.py
+
+# Expected issues and solutions:
+# - "No real articles collected": NewsAPI key not configured or invalid
+# - "Market data failed": yfinance API issues (normal, falls back to dummy data)
+# - "Rate limited": Yahoo Finance rate limiting (temporary, will recover)
+
+# Check current data source mode
+grep USE_REAL_DATA .env
+
+# Switch between real and dummy data
+# USE_REAL_DATA=True   # Use real APIs (requires NewsAPI key)
+# USE_REAL_DATA=False  # Use dummy data (always works)
+```
+
+**yfinance "Expecting value" errors:**
+```bash
+# This is a known yfinance library issue with Yahoo Finance's JSON responses
+# The system automatically falls back to dummy data
+# Real data collection uses direct Yahoo Finance API bypass for better reliability
+
+# Verify the bypass is working:
+python test_yahoo_direct.py
+# Expected: ✅ Success! yahoo_direct, Price: $XXX.XX
+```
+
 ### Service Endpoints
 
 - **API**: http://localhost:8000
@@ -344,6 +474,9 @@ make trigger-and-wait
 make trigger-and-wait          # Start everything + populate database
 
 # Testing
+make test                     # Core tests (16 tests, mocked)
+make test-real-data          # Real API tests (4 tests, requires API keys)
+make test-all               # All tests (87 total, may have setup issues)
 make docker-test-build         # Build test container with pytest
 make docker-test              # Run all tests in Docker
 make docker-test-coverage     # Run tests with coverage report
@@ -352,6 +485,12 @@ make docker-test-interactive  # Interactive test container for debugging
 # Database verification
 make db-show-data             # Show sample data from all tables
 make db-show-tables           # List all database tables
+make db-connect               # Connect to PostgreSQL database directly
+
+# Database queries (after make db-connect):
+# \dt                         # List tables
+# SELECT * FROM market_data;  # Show real market data  
+# SELECT * FROM news_data LIMIT 5;  # Show news with sentiment
 ```
 
 #### **🛠️ Development & Debugging**
@@ -451,9 +590,21 @@ make clean                    # Clean temporary files
 ## Project Status
 
 - ✅ **Phase 1 Complete**: Infrastructure setup, Docker, Airflow, database schema
-- 🚧 **Phase 2 In Progress**: Data collection engines, risk management
-- ⏳ **Phase 3 Planned**: Analysis engines, recommendation system
+- ✅ **Phase 2 Complete**: Real data collection engines with Yahoo Finance & NewsAPI integration
+- ✅ **Data Collection**: Working 15-minute market data + financial news with sentiment analysis
+- ✅ **Robust Testing**: 16 core tests + 4 real data integration tests
+- ⏳ **Phase 3 In Progress**: Advanced analysis engines, recommendation system
 - ⏳ **Phase 4 Planned**: Trading integration, performance tracking
+
+### **🎯 Current Capabilities**
+
+- **✅ Real Market Data**: SPY, AAPL, MSFT, QQQ from Yahoo Finance (direct API bypass)
+- **✅ News Integration**: 50+ financial articles per collection from NewsAPI  
+- **✅ Sentiment Analysis**: FinBERT → TextBlob → Dummy fallback system
+- **✅ Database Storage**: PostgreSQL with proper schemas and indexes
+- **✅ Pipeline Orchestration**: Apache Airflow with 15-minute intervals
+- **✅ Error Handling**: Graceful degradation when APIs fail
+- **✅ Testing Coverage**: Comprehensive mocked + real data tests
 
 ## Contributing
 

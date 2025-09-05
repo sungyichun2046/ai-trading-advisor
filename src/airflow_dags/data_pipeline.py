@@ -6,11 +6,14 @@ from typing import List
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 from airflow.operators.python import PythonOperator
-from airflow.sensors.filesystem import FileSensor
+# from airflow.sensors.filesystem import FileSensor  # Not used in current implementation
 from airflow.utils.dates import days_ago
 from airflow.utils.task_group import TaskGroup
 
 from src.config import settings
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Default arguments for the DAG
 default_args = {
@@ -47,34 +50,31 @@ def collect_market_data(**context) -> dict:
     execution_date = context["execution_date"]
     collector = MarketDataCollector()
 
-    # Define symbols to collect
-    symbols = [
-        "SPY",
-        "QQQ",
-        "IWM",
-        "AAPL",
-        "MSFT",
-        "GOOGL",
-        "AMZN",
-        "TSLA",
-    ]  # [?]todo: symbols should be in config.py
+    # Define symbols to collect (TODO: move to config.py)
+    symbols = ["SPY", "QQQ", "IWM", "AAPL", "MSFT", "GOOGL", "AMZN", "TSLA"]
 
     results = {}
     for symbol in symbols:
         try:
             data = collector.collect_real_time_data(symbol)
-            results[symbol] = {
-                "status": "success",
-                "records": len(data) if data else 0,
-                "timestamp": execution_date.isoformat(),
-            }
+            if data:
+                results[symbol] = data
+            else:
+                results[symbol] = {
+                    "status": "failed",
+                    "error": "No data returned",
+                    "symbol": symbol,
+                    "timestamp": execution_date.isoformat(),
+                }
         except Exception as e:
             results[symbol] = {
                 "status": "failed",
                 "error": str(e),
+                "symbol": symbol,
                 "timestamp": execution_date.isoformat(),
             }
 
+    logger.info(f"Collected data for {len(results)} symbols")
     return results
 
 
@@ -90,16 +90,20 @@ def collect_news_sentiment(**context) -> dict:
     collector = NewsCollector()
 
     try:
-        news_data = collector.collect_financial_news()
-        sentiment_scores = collector.analyze_sentiment(news_data)
+        # Collect financial news
+        news_articles = collector.collect_financial_news()
+
+        # Analyze sentiment
+        sentiment_results = collector.analyze_sentiment(news_articles)
 
         return {
             "status": "success",
-            "news_articles": len(news_data),
-            "avg_sentiment": sentiment_scores.get("average", 0),
             "timestamp": execution_date.isoformat(),
+            "articles_count": len(news_articles),
+            **sentiment_results  # Include all sentiment analysis results
         }
     except Exception as e:
+        logger.error(f"Failed to collect news sentiment: {e}")
         return {
             "status": "failed",
             "error": str(e),
@@ -144,15 +148,40 @@ def validate_data_quality(**context) -> bool:
     return True
 
 
+def initialize_database(**context) -> dict:
+    """Initialize database tables if they don't exist.
+
+    Returns:
+        dict: Initialization results
+    """
+    from src.data.database import DatabaseManager
+
+    try:
+        db_manager = DatabaseManager()
+        db_manager.create_tables()
+        logger.info("Database tables initialized successfully")
+        return {
+            "status": "success",
+            "message": "Database tables created/verified",
+            "timestamp": context["execution_date"].isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+        return {
+            "status": "failed",
+            "error": str(e),
+            "timestamp": context["execution_date"].isoformat()
+        }
+
+
 def store_processed_data(**context) -> dict:
     """Store validated data in database.
 
     Returns:
         dict: Storage operation results
     """
-    from src.data.database import DatabaseManager
+    from src.data.database import MarketDataStorage, NewsStorage
 
-    db_manager = DatabaseManager()
     execution_date = context["execution_date"]
 
     # Get validated data from previous tasks
@@ -161,12 +190,14 @@ def store_processed_data(**context) -> dict:
 
     try:
         # Store market data
-        market_storage_result = db_manager.store_market_data(
+        market_storage = MarketDataStorage()
+        market_storage_result = market_storage.store_market_data(
             market_data, execution_date
         )
 
         # Store news sentiment data
-        news_storage_result = db_manager.store_news_data(news_data, execution_date)
+        news_storage = NewsStorage()
+        news_storage_result = news_storage.store_news_data(news_data, execution_date)
 
         return {
             "status": "success",
@@ -175,6 +206,7 @@ def store_processed_data(**context) -> dict:
             "timestamp": execution_date.isoformat(),
         }
     except Exception as e:
+        logger.error(f"Failed to store data: {e}")
         return {
             "status": "failed",
             "error": str(e),
@@ -184,6 +216,21 @@ def store_processed_data(**context) -> dict:
 
 # Task definitions
 with dag:
+    # Database initialization
+    init_db_task = PythonOperator(
+        task_id="initialize_database",
+        python_callable=initialize_database,
+        doc_md="""
+        ### Initialize Database
+        
+        Creates database tables if they don't exist:
+        - market_data table with indexes
+        - news_data table with sentiment scores
+        - analysis_results table for future use
+        - recommendations table for future use
+        """,
+    )
+
     # Data collection task group
     with TaskGroup(
         "data_collection", tooltip="Collect data from various sources"
@@ -194,13 +241,13 @@ with dag:
             doc_md="""
             ### Collect Market Data
             
-            Collects real-time market data from configured data sources:
+            Collects real-time market data using yfinance:
             - Price data (OHLCV)
             - Volume data
-            - Technical indicators
-            - Market indices
+            - Market cap and P/E ratios
+            - 15-minute intervals
             
-            **Sources**: Alpha Vantage, Polygon.io, Yahoo Finance
+            **Sources**: yfinance (real-time) or dummy data (development)
             **Frequency**: Every 15 minutes during market hours
             **Symbols**: Major ETFs and stocks
             """,
@@ -213,12 +260,12 @@ with dag:
             ### Collect News & Sentiment
             
             Collects financial news and performs sentiment analysis:
-            - Financial news articles
-            - Sentiment scoring
+            - Financial news articles from NewsAPI
+            - FinBERT sentiment analysis
             - Market impact assessment
             
-            **Sources**: Financial news APIs
-            **Analysis**: NLP sentiment scoring
+            **Sources**: NewsAPI (real) or dummy data (development)
+            **Analysis**: FinBERT model for financial sentiment
             """,
         )
 
@@ -246,11 +293,11 @@ with dag:
         ### Store Processed Data
         
         Stores validated data in PostgreSQL database:
-        - Market data tables
-        - News sentiment tables
-        - Metadata and audit logs
+        - Market data with OHLCV + metadata
+        - News sentiment with individual article scores
+        - Proper indexing for query performance
         
-        **Database**: PostgreSQL with proper indexing
+        **Database**: PostgreSQL with optimized schema
         **Retention**: Configurable data retention policies
         """,
     )
@@ -261,8 +308,8 @@ with dag:
         bash_command="""
         echo "Data pipeline completed successfully"
         echo "Execution date: {{ ds }}"
-        echo "Market data status: {{ task_instance.xcom_pull(task_ids='collect_market_data') }}"
-        echo "Storage status: {{ task_instance.xcom_pull(task_ids='store_processed_data') }}"
+        echo "Market data status: {{ task_instance.xcom_pull(task_ids='collect_market_data')['SPY']['status'] if task_instance.xcom_pull(task_ids='collect_market_data') else 'No data' }}"
+        echo "Storage status: {{ task_instance.xcom_pull(task_ids='store_processed_data')['status'] if task_instance.xcom_pull(task_ids='store_processed_data') else 'No data' }}"
         """,
         doc_md="""
         ### Pipeline Health Check
@@ -270,9 +317,9 @@ with dag:
         Final health check and logging:
         - Confirms successful pipeline execution
         - Logs execution metrics
-        - Updates monitoring dashboards
+        - Reports data collection status
         """,
     )
 
     # Define task dependencies
-    data_collection >> validate_task >> store_task >> health_check
+    init_db_task >> data_collection >> validate_task >> store_task >> health_check

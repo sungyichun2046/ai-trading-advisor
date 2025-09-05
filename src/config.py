@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     # API Keys
     alpha_vantage_api_key: Optional[str] = None
     polygon_api_key: Optional[str] = None
+    newsapi_key: Optional[str] = None
+
+    # Data Collection Settings
+    use_real_data: bool = False
+    data_collection_interval: int = 15  # minutes
+    max_news_articles: int = 50
 
     # Application Settings
     debug: bool = True
