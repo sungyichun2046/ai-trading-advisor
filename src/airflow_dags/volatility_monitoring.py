@@ -27,6 +27,7 @@ dag = DAG(
     schedule_interval=timedelta(minutes=15),  # Check every 15 minutes during market hours
     max_active_runs=3,
     catchup=False,
+    start_date=datetime(2024, 1, 1),  # Explicitly set start_date
     tags=["real-time", "volatility", "monitoring", "alerts"],
 )
 
@@ -247,11 +248,11 @@ volatility_sensor = VolatilitySensor(
     dag=dag
 )
 
-evaluate_conditions = evaluate_volatility_conditions()
-check_hours = check_market_hours()
-decide_actions_task = decide_actions()
-log_event = log_volatility_event()
-no_action_task = no_action()
+evaluate_conditions = evaluate_volatility_conditions.override(task_id='evaluate_volatility_conditions')()
+check_hours = check_market_hours.override(task_id='check_market_hours')()
+decide_actions_task = decide_actions.override(task_id='decide_actions')()
+log_event = log_volatility_event.override(task_id='log_volatility_event')()
+no_action_task = no_action.override(task_id='no_action')()
 
 # Emergency analysis trigger (triggers analysis_pipeline DAG)
 trigger_emergency_analysis = TriggerDagRunOperator(

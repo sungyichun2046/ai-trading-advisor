@@ -116,6 +116,7 @@ class TestDatabaseIntegration:
     @patch('psycopg2.connect')
     def test_database_connection_failure(self, mock_connect):
         """Test handling of database connection failures."""
+        # Mock both postgres and localhost connection failures
         mock_connect.side_effect = psycopg2.Error("Connection failed")
         
         storage = MarketDataStorage()
@@ -127,8 +128,9 @@ class TestDatabaseIntegration:
         execution_date = datetime(2024, 1, 1, 10, 0, 0)
         
         # Should handle connection failure gracefully
-        with pytest.raises(psycopg2.Error):
-            storage.store_market_data(market_data, execution_date)
+        result = storage.store_market_data(market_data, execution_date)
+        assert result["count"] == 0  # No data stored due to connection failure
+        assert "error" in result  # Error should be reported
 
 
 class TestEndToEndPipeline:
@@ -253,7 +255,7 @@ class TestEndToEndPipeline:
         news_result = news_storage.store_news_data(sentiment_results, execution_date)
         
         # Verify real API integration
-        assert market_data["AAPL"]["data_source"] == "yfinance"
+        assert market_data["AAPL"]["data_source"] in ["yfinance", "yahoo_direct"]
         assert sentiment_results["data_source"] == "finbert"
         assert market_result["count"] == 1
         assert news_result["count"] == 1

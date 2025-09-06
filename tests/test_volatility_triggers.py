@@ -236,7 +236,7 @@ class TestMarketHours:
             'execution_date': datetime(2024, 1, 1, 12, 0)  # Noon (market open)
         }
         
-        with patch('datetime.datetime') as mock_datetime:
+        with patch('src.airflow_dags.volatility_monitoring.datetime') as mock_datetime:
             mock_datetime.now.return_value = datetime(2024, 1, 1, 12, 0)
             result = check_market_hours.function(**context)
         

@@ -458,6 +458,154 @@ python test_yahoo_direct.py
 # Expected: ✅ Success! yahoo_direct, Price: $XXX.XX
 ```
 
+## 🌐 **API Endpoints & Testing**
+
+After running `make trigger-and-wait` or `make dev`, you can visit these endpoints:
+
+### 🚀 **Core API Endpoints**
+
+```bash
+# Health Check
+curl http://localhost:8000/
+# Response: {"message":"AI Trading Advisor API","version":"0.1.0","status":"running"}
+
+curl http://localhost:8000/health
+# Response: {"status":"healthy","timestamp":"2024-01-01T00:00:00Z"}
+```
+
+### 🎯 **Risk Profile API Endpoints**
+
+The system includes a complete **Risk Profiling System** for personalized trading recommendations:
+
+#### **Get Risk Assessment Questionnaire**
+```bash
+curl http://localhost:8000/api/v1/risk-profile/questionnaire
+```
+
+#### **Submit Risk Assessment** 
+```bash
+curl -X POST http://localhost:8000/api/v1/risk-profile/assess \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "test_user_001",
+    "responses": {
+      "experience_level": "Moderate experience - 2-5 years",
+      "investment_horizon": "Medium-term (1-3 years)",
+      "volatility_comfort": "3",
+      "loss_tolerance": "10-20% - Moderate losses are acceptable for higher returns",
+      "portfolio_percentage": "25-50% - Moderate portion",
+      "income_stability": "Moderate - Income varies but generally consistent",
+      "market_reaction": "Hold my positions and wait for recovery",
+      "financial_goals": "Moderate growth - Steady appreciation",
+      "age_category": "36-50 - Peak earning years",
+      "trading_frequency": "Regularly - Weekly trading"
+    }
+  }'
+```
+
+**Expected Response:**
+```json
+{
+  "user_id": "test_user_001",
+  "risk_category": "moderate",
+  "risk_score": 65,
+  "assessment_date": "2024-01-01T12:00:00",
+  "questionnaire_version": "1.0",
+  "trading_parameters": {
+    "max_risk_per_trade": 0.02,
+    "max_portfolio_risk": 0.20,
+    "max_position_size": 0.10,
+    "daily_loss_limit": 0.06,
+    "leverage_limit": 1.5
+  },
+  "category_description": "Moderate investors seek balanced growth with measured risk, accepting some volatility for better returns.",
+  "confidence_score": 0.85
+}
+```
+
+#### **Get Existing Risk Profile**
+```bash
+curl http://localhost:8000/api/v1/risk-profile/profile/test_user_001
+```
+
+#### **Validate Trading Decision**
+```bash
+curl -X POST http://localhost:8000/api/v1/risk-profile/validate-trade \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "test_user_001",
+    "trade_size": 5000.0,
+    "account_balance": 50000.0,
+    "position_risk": 0.015
+  }'
+```
+
+**Expected Response:**
+```json
+{
+  "approved": true,
+  "message": "Trade approved for user risk profile",
+  "user_risk_category": "moderate",
+  "risk_parameters": {
+    "max_risk_per_trade": 0.02,
+    "max_portfolio_risk": 0.20,
+    "max_position_size": 0.10
+  }
+}
+```
+
+#### **Get Risk Categories**
+```bash
+curl http://localhost:8000/api/v1/risk-profile/categories
+```
+
+#### **Get Risk Parameters for Category**
+```bash
+curl http://localhost:8000/api/v1/risk-profile/parameters/moderate
+```
+
+### 🌐 **Interactive API Documentation**
+
+Visit the **FastAPI automatic documentation**:
+
+- **Swagger UI**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc
+
+These provide interactive API testing with:
+- ✅ All endpoints with example requests/responses
+- ✅ Built-in testing interface
+- ✅ Request/response schema validation
+- ✅ Authentication testing (when implemented)
+
+### 🔧 **Service Management Endpoints**
+
+- **Main API**: http://localhost:8000
+- **Airflow UI**: http://localhost:8080 (admin/admin)  
+- **PostgreSQL**: localhost:5432 (trader/trader_password)
+- **Redis**: localhost:6379
+
+### 📊 **Testing the Complete System**
+
+```bash
+# 1. Start the system
+make trigger-and-wait
+
+# 2. Test API health
+curl http://localhost:8000/health
+
+# 3. Test risk profiling (interactive docs)
+open http://localhost:8000/docs
+
+# 4. Check Airflow pipelines
+open http://localhost:8080
+
+# 5. Verify database data
+make db-show-data
+
+# 6. Run comprehensive tests
+make test-all
+```
+
 ### Service Endpoints
 
 - **API**: http://localhost:8000

@@ -51,11 +51,11 @@ class TestDAGStructure:
         dag_bag = DagBag(dag_folder="src/airflow_dags", include_examples=False)
         dag = dag_bag.get_dag("data_collection_pipeline")
         
-        # Expected tasks
+        # Expected tasks (accounting for TaskGroups)
         expected_tasks = [
             "initialize_database",
-            "collect_market_data",
-            "collect_news_sentiment", 
+            "data_collection.collect_market_data",
+            "data_collection.collect_news_sentiment", 
             "validate_data_quality",
             "store_processed_data",
             "pipeline_health_check"
@@ -71,10 +71,10 @@ class TestDAGStructure:
         dag_bag = DagBag(dag_folder="src/airflow_dags", include_examples=False)
         dag = dag_bag.get_dag("data_collection_pipeline")
         
-        # Get tasks
+        # Get tasks (accounting for TaskGroups)
         init_db = dag.get_task("initialize_database")
-        collect_market = dag.get_task("collect_market_data")
-        collect_news = dag.get_task("collect_news_sentiment")
+        collect_market = dag.get_task("data_collection.collect_market_data")
+        collect_news = dag.get_task("data_collection.collect_news_sentiment")
         validate = dag.get_task("validate_data_quality")
         store = dag.get_task("store_processed_data")
         health_check = dag.get_task("pipeline_health_check")
@@ -83,7 +83,7 @@ class TestDAGStructure:
         assert len(init_db.upstream_task_ids) == 0  # First task
         assert collect_market.upstream_task_ids == {"initialize_database"}
         assert collect_news.upstream_task_ids == {"initialize_database"}
-        assert validate.upstream_task_ids == {"collect_market_data", "collect_news_sentiment"}
+        assert validate.upstream_task_ids == {"data_collection.collect_market_data", "data_collection.collect_news_sentiment"}
         assert store.upstream_task_ids == {"validate_data_quality"}
         assert health_check.upstream_task_ids == {"store_processed_data"}
 
@@ -328,8 +328,8 @@ class TestDAGExecution:
         assert dag is not None
         
         # Check that data collection tasks run in parallel
-        collect_market = dag.get_task("collect_market_data")
-        collect_news = dag.get_task("collect_news_sentiment")
+        collect_market = dag.get_task("data_collection.collect_market_data")
+        collect_news = dag.get_task("data_collection.collect_news_sentiment")
         
         # Both should depend only on init_db
         assert collect_market.upstream_task_ids == {"initialize_database"}
@@ -337,8 +337,8 @@ class TestDAGExecution:
         
         # Validate should wait for both collection tasks
         validate = dag.get_task("validate_data_quality")
-        assert "collect_market_data" in validate.upstream_task_ids
-        assert "collect_news_sentiment" in validate.upstream_task_ids
+        assert "data_collection.collect_market_data" in validate.upstream_task_ids
+        assert "data_collection.collect_news_sentiment" in validate.upstream_task_ids
 
     def test_dag_timeout_configuration(self):
         """Test DAG timeout and retry configuration."""

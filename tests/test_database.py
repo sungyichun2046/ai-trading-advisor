@@ -9,13 +9,28 @@ from datetime import datetime, date
 @pytest.fixture
 def db_connection():
     """Create database connection for testing."""
-    conn = psycopg2.connect(
-        host=os.getenv('POSTGRES_HOST', 'postgres'),
-        port=os.getenv('POSTGRES_PORT', '5432'),
-        database=os.getenv('POSTGRES_DB', 'trading_advisor'),
-        user=os.getenv('POSTGRES_USER', 'trader'),
-        password=os.getenv('POSTGRES_PASSWORD', 'trader_password')
-    )
+    # For local testing, try localhost first, then fall back to postgres (Docker)
+    host = os.getenv('POSTGRES_HOST', 'localhost')
+    try:
+        conn = psycopg2.connect(
+            host=host,
+            port=os.getenv('POSTGRES_PORT', '5432'),
+            database=os.getenv('POSTGRES_DB', 'trading_advisor'),
+            user=os.getenv('POSTGRES_USER', 'trader'),
+            password=os.getenv('POSTGRES_PASSWORD', 'trader_password')
+        )
+    except psycopg2.OperationalError:
+        # If localhost fails, try Docker hostname
+        if host == 'localhost':
+            conn = psycopg2.connect(
+                host='postgres',
+                port=os.getenv('POSTGRES_PORT', '5432'),
+                database=os.getenv('POSTGRES_DB', 'trading_advisor'),
+                user=os.getenv('POSTGRES_USER', 'trader'),
+                password=os.getenv('POSTGRES_PASSWORD', 'trader_password')
+            )
+        else:
+            raise
     yield conn
     conn.close()
 

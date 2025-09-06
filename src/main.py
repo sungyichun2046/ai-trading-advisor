@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 
 from src.config import settings
+from src.api.risk_profile import router as risk_profile_router
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -24,6 +25,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include API routers
+app.include_router(risk_profile_router)
 
 
 @app.on_event("startup")

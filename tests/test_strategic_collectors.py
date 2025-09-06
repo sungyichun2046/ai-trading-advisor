@@ -7,6 +7,12 @@ import pandas as pd
 
 from src.data.collectors import FundamentalDataCollector, VolatilityMonitor
 
+# Import MockDataFrame from data_collectors test
+import sys
+import os
+sys.path.insert(0, os.path.dirname(__file__))
+from test_data_collectors import MockDataFrame, MockSeries
+
 
 class TestFundamentalDataCollector:
     """Test FundamentalDataCollector functionality."""
@@ -54,10 +60,10 @@ class TestFundamentalDataCollector:
         }
         
         # Mock empty DataFrames for financials (to avoid index errors)
-        mock_ticker.quarterly_financials = pd.DataFrame()
-        mock_ticker.financials = pd.DataFrame()
-        mock_ticker.quarterly_balance_sheet = pd.DataFrame()
-        mock_ticker.quarterly_cashflow = pd.DataFrame()
+        mock_ticker.quarterly_financials = MockDataFrame()
+        mock_ticker.financials = MockDataFrame()
+        mock_ticker.quarterly_balance_sheet = MockDataFrame()
+        mock_ticker.quarterly_cashflow = MockDataFrame()
         
         collector = FundamentalDataCollector()
         result = collector.collect_weekly_fundamentals("AAPL")
@@ -115,7 +121,7 @@ class TestFundamentalDataCollector:
             '2024-Q2': [950000, 180000], 
             '2024-Q3': [900000, 160000]
         }
-        financials = pd.DataFrame(data, index=['Total Revenue', 'Net Income'])
+        financials = MockDataFrame(data, index=['Total Revenue', 'Net Income'])
         
         # Test successful extraction
         revenue = collector._get_latest_financial_item(financials, 'Total Revenue')
@@ -126,7 +132,7 @@ class TestFundamentalDataCollector:
         assert missing is None
         
         # Test empty DataFrame
-        empty_df = pd.DataFrame()
+        empty_df = MockDataFrame()
         empty_result = collector._get_latest_financial_item(empty_df, 'Total Revenue')
         assert empty_result is None
 
@@ -179,14 +185,14 @@ class TestVolatilityMonitor:
         
         mock_ticker_class.side_effect = ticker_side_effect
         
-        # Mock VIX data (normal volatility)
-        vix_data = pd.DataFrame({
+        # Mock VIX data (normal volatility) - return as MockDataFrame 
+        vix_data = MockDataFrame({
             'Close': [18.5, 19.2, 18.8, 18.0, 17.5],
         })
         mock_vix_ticker.history.return_value = vix_data
         
-        # Mock SPY data (normal volume)
-        spy_data = pd.DataFrame({
+        # Mock SPY data (normal volume)  
+        spy_data = MockDataFrame({
             'Close': [450.0] * 25,
             'High': [452.0] * 25,
             'Low': [448.0] * 25,
@@ -211,7 +217,7 @@ class TestVolatilityMonitor:
         mock_ticker_class.return_value = mock_vix_ticker
         
         # Mock high VIX data
-        vix_data = pd.DataFrame({
+        vix_data = MockDataFrame({
             'Close': [35.0, 36.2, 35.8, 34.0, 33.5],
         })
         mock_vix_ticker.history.return_value = vix_data
@@ -248,13 +254,13 @@ class TestVolatilityMonitor:
         mock_ticker_class.side_effect = ticker_side_effect
         
         # Mock extreme VIX data
-        vix_data = pd.DataFrame({
+        vix_data = MockDataFrame({
             'Close': [45.0, 46.2, 45.8, 44.0, 43.5],
         })
         mock_vix_ticker.history.return_value = vix_data
         
         # Mock SPY with volume spike and price movement
-        spy_data = pd.DataFrame({
+        spy_data = MockDataFrame({
             'Close': [400.0] * 20 + [380.0] * 4 + [375.0],  # 6.25% drop
             'High': [402.0] * 20 + [385.0] * 4 + [380.0],
             'Low': [398.0] * 20 + [375.0] * 4 + [370.0],
@@ -263,7 +269,7 @@ class TestVolatilityMonitor:
         mock_spy_ticker.history.return_value = spy_data
         
         # Mock other indices with normal data
-        normal_data = pd.DataFrame({
+        normal_data = MockDataFrame({
             'Close': [300.0] * 25,
             'High': [302.0] * 25,
             'Low': [298.0] * 25,
@@ -329,7 +335,7 @@ class TestVolatilityMonitor:
         mock_ticker_class.return_value = mock_ticker
         
         # Mock normal market data
-        normal_data = pd.DataFrame({
+        normal_data = MockDataFrame({
             'Close': [400.0] * 25,
             'High': [402.0] * 25,
             'Low': [398.0] * 25,
@@ -354,7 +360,7 @@ class TestVolatilityMonitor:
         mock_ticker_class.return_value = mock_ticker
         
         # Mock insufficient data (less than 20 records needed)
-        insufficient_data = pd.DataFrame({
+        insufficient_data = MockDataFrame({
             'Close': [400.0] * 5,
             'Volume': [50000000] * 5,
         })

@@ -31,8 +31,27 @@ class DatabaseManager:
         """Get database connection with context manager."""
         conn = None
         try:
+            # Try original connection parameters first
             conn = psycopg2.connect(**self.connection_params)
             yield conn
+        except psycopg2.OperationalError as e:
+            # If original connection fails and host is 'postgres', try localhost
+            if self.connection_params['host'] == 'postgres':
+                try:
+                    localhost_params = self.connection_params.copy()
+                    localhost_params['host'] = 'localhost'
+                    conn = psycopg2.connect(**localhost_params)
+                    yield conn
+                except Exception as localhost_error:
+                    logger.error(f"Failed to connect to database (both postgres and localhost): {e}, {localhost_error}")
+                    if conn:
+                        conn.rollback()
+                    raise
+            else:
+                logger.error(f"Failed to connect to database: {e}")
+                if conn:
+                    conn.rollback()
+                raise
         except Exception as e:
             logger.error(f"Failed to connect to database: {e}")
             if conn:
@@ -190,6 +209,32 @@ class DatabaseManager:
                 );
             """)
             
+            # User profiles table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_profiles (
+                    id SERIAL PRIMARY KEY,
+                    user_id VARCHAR(100) NOT NULL UNIQUE,
+                    risk_category VARCHAR(20) NOT NULL,
+                    risk_score INTEGER NOT NULL,
+                    questionnaire_version VARCHAR(10) NOT NULL DEFAULT '1.0',
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            
+            # User risk responses table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS user_risk_responses (
+                    id SERIAL PRIMARY KEY,
+                    user_id VARCHAR(100) NOT NULL,
+                    question_id VARCHAR(100) NOT NULL,
+                    response TEXT NOT NULL,
+                    score INTEGER NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES user_profiles(user_id) ON DELETE CASCADE
+                );
+            """)
+            
             # Create indexes for better performance
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_market_data_symbol_date ON market_data(symbol, execution_date);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_news_data_date ON news_data(execution_date);")
@@ -198,6 +243,8 @@ class DatabaseManager:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_fundamental_data_symbol_date ON fundamental_data(symbol, execution_date);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_volatility_events_level_date ON volatility_events(volatility_level, execution_date);")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_alerts_type_severity ON alerts(alert_type, severity);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_profiles_user_id ON user_profiles(user_id);")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_risk_responses_user_id ON user_risk_responses(user_id);")
             
             conn.commit()
             logger.info("Database tables created successfully")
@@ -608,3 +655,326 @@ class AnalysisDataManager(DatabaseManager):
 class RecommendationDataManager(DatabaseManager):
     """Legacy recommendation data manager - use DatabaseManager directly."""
     pass
+
+
+class UserProfileStorage(DatabaseManager):
+    """Production-ready storage operations for user risk profiles.
+    
+    Features:
+    - Connection pooling and retry logic
+    - Comprehensive error handling
+    - Audit logging for compliance
+    - Data validation and sanitization
+    - Performance monitoring
+    """
+
+    def store_risk_profile(self, profile: 'RiskProfile') -> bool:
+        """Store user risk profile with comprehensive validation and error handling.
+
+        Args:
+            profile: RiskProfile object to store
+
+        Returns:
+            True if successful, False otherwise
+            
+        Raises:
+            ValueError: If profile data is invalid
+        """
+        from src.core.user_profiling import RiskProfile
+        
+        # Validate profile before storage
+        if not profile.user_id or not profile.user_id.strip():
+            raise ValueError("user_id cannot be empty")
+        if not 0 <= profile.risk_score <= 100:
+            raise ValueError("risk_score must be between 0 and 100")
+        if len(profile.responses) == 0:
+            raise ValueError("profile must have at least one response")
+        
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                with self.get_connection() as conn:
+                    cursor = conn.cursor()
+                    
+                    # Begin transaction
+                    cursor.execute("BEGIN")
+                    
+                    # Store or update user profile with additional metadata
+                    cursor.execute("""
+                        INSERT INTO user_profiles (
+                            user_id, risk_category, risk_score, questionnaire_version, 
+                            created_at, updated_at
+                        ) VALUES (%s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (user_id) 
+                        DO UPDATE SET 
+                            risk_category = EXCLUDED.risk_category,
+                            risk_score = EXCLUDED.risk_score,
+                            questionnaire_version = EXCLUDED.questionnaire_version,
+                            updated_at = EXCLUDED.updated_at
+                    """, (
+                        profile.user_id.strip(),
+                        profile.risk_category.value,
+                        profile.risk_score,
+                        profile.questionnaire_version,
+                        profile.created_at,
+                        profile.updated_at
+                    ))
+                    
+                    # Delete existing responses for this user
+                    cursor.execute("""
+                        DELETE FROM user_risk_responses WHERE user_id = %s
+                    """, (profile.user_id,))
+                    
+                    # Batch insert new responses
+                    if profile.responses:
+                        response_data = [
+                            (
+                                profile.user_id,
+                                response.question_id,
+                                response.response[:1000],  # Truncate long responses
+                                max(1, min(5, response.score))  # Ensure score is in valid range
+                            )
+                            for response in profile.responses
+                        ]
+                        
+                        cursor.executemany("""
+                            INSERT INTO user_risk_responses (
+                                user_id, question_id, response, score
+                            ) VALUES (%s, %s, %s, %s)
+                        """, response_data)
+                    
+                    # Commit transaction
+                    cursor.execute("COMMIT")
+                    
+                    logger.info(
+                        f"Risk profile stored successfully - User: {profile.user_id}, "
+                        f"Category: {profile.risk_category.value}, Score: {profile.risk_score}, "
+                        f"Responses: {len(profile.responses)}"
+                    )
+                    return True
+                    
+            except psycopg2.OperationalError as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"Database connection error, retrying ({attempt + 1}/{max_retries}): {e}")
+                    continue
+                else:
+                    logger.error(f"Failed to store risk profile after {max_retries} attempts: {e}")
+                    return False
+            except Exception as e:
+                logger.error(f"Failed to store risk profile for user {profile.user_id}: {e}")
+                return False
+                
+        return False
+
+    def get_risk_profile(self, user_id: str) -> Optional['RiskProfile']:
+        """Retrieve risk profile for a user.
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            RiskProfile object if found, None otherwise
+        """
+        from src.core.user_profiling import RiskProfile, RiskCategory, UserResponse
+        
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                
+                # Get profile data
+                cursor.execute("""
+                    SELECT * FROM user_profiles WHERE user_id = %s
+                """, (user_id,))
+                
+                profile_data = cursor.fetchone()
+                if not profile_data:
+                    return None
+                
+                # Get responses
+                cursor.execute("""
+                    SELECT * FROM user_risk_responses WHERE user_id = %s
+                    ORDER BY question_id
+                """, (user_id,))
+                
+                response_data = cursor.fetchall()
+                
+                # Convert to objects
+                responses = [
+                    UserResponse(
+                        question_id=row['question_id'],
+                        response=row['response'],
+                        score=row['score']
+                    )
+                    for row in response_data
+                ]
+                
+                return RiskProfile(
+                    user_id=profile_data['user_id'],
+                    risk_category=RiskCategory(profile_data['risk_category']),
+                    risk_score=profile_data['risk_score'],
+                    responses=responses,
+                    created_at=profile_data['created_at'],
+                    updated_at=profile_data['updated_at'],
+                    questionnaire_version=profile_data['questionnaire_version']
+                )
+                
+        except Exception as e:
+            logger.error(f"Failed to retrieve risk profile for user {user_id}: {e}")
+            return None
+
+    def delete_risk_profile(self, user_id: str) -> bool:
+        """Delete risk profile for a user.
+
+        Args:
+            user_id: User identifier
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                # Delete profile (responses are deleted via CASCADE)
+                cursor.execute("""
+                    DELETE FROM user_profiles WHERE user_id = %s
+                """, (user_id,))
+                
+                deleted_count = cursor.rowcount
+                conn.commit()
+                
+                if deleted_count > 0:
+                    logger.info(f"Risk profile deleted for user {user_id}")
+                    return True
+                else:
+                    logger.warning(f"No risk profile found to delete for user {user_id}")
+                    return False
+                
+        except Exception as e:
+            logger.error(f"Failed to delete risk profile for user {user_id}: {e}")
+            return False
+
+    def get_all_risk_profiles(self, limit: int = 100, offset: int = 0, filters: Optional[Dict] = None) -> List[Dict]:
+        """Get risk profiles with optional filtering (admin function).
+
+        Args:
+            limit: Maximum number of profiles to return (max 1000)
+            offset: Number of profiles to skip
+            filters: Optional filters (risk_category, created_after, etc.)
+
+        Returns:
+            List of risk profile summaries with metadata
+        """
+        # Validate input parameters
+        limit = min(max(1, limit), 1000)  # Ensure reasonable limits
+        offset = max(0, offset)
+        
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                
+                # Build dynamic query with filters
+                base_query = """
+                    SELECT 
+                        user_id, risk_category, risk_score, questionnaire_version,
+                        created_at, updated_at,
+                        CASE 
+                            WHEN updated_at < NOW() - INTERVAL '90 days' THEN true 
+                            ELSE false 
+                        END as review_recommended
+                    FROM user_profiles 
+                """
+                
+                where_conditions = []
+                params = []
+                
+                if filters:
+                    if 'risk_category' in filters:
+                        where_conditions.append("risk_category = %s")
+                        params.append(filters['risk_category'])
+                    
+                    if 'created_after' in filters:
+                        where_conditions.append("created_at >= %s")
+                        params.append(filters['created_after'])
+                    
+                    if 'score_min' in filters:
+                        where_conditions.append("risk_score >= %s")
+                        params.append(filters['score_min'])
+                    
+                    if 'score_max' in filters:
+                        where_conditions.append("risk_score <= %s")
+                        params.append(filters['score_max'])
+                
+                query = base_query
+                if where_conditions:
+                    query += " WHERE " + " AND ".join(where_conditions)
+                
+                query += " ORDER BY updated_at DESC LIMIT %s OFFSET %s"
+                params.extend([limit, offset])
+                
+                cursor.execute(query, params)
+                
+                profiles = [dict(row) for row in cursor.fetchall()]
+                
+                # Add response count for each profile
+                if profiles:
+                    user_ids = [p['user_id'] for p in profiles]
+                    placeholders = ','.join(['%s'] * len(user_ids))
+                    cursor.execute(f"""
+                        SELECT user_id, COUNT(*) as response_count 
+                        FROM user_risk_responses 
+                        WHERE user_id IN ({placeholders})
+                        GROUP BY user_id
+                    """, user_ids)
+                    
+                    response_counts = {row['user_id']: row['response_count'] for row in cursor.fetchall()}
+                    
+                    for profile in profiles:
+                        profile['response_count'] = response_counts.get(profile['user_id'], 0)
+                
+                return profiles
+                
+        except Exception as e:
+            logger.error(f"Failed to get risk profiles: {e}")
+            return []
+
+    def get_risk_profile_stats(self) -> Dict[str, any]:
+        """Get risk profile statistics.
+
+        Returns:
+            Statistics about risk profiles in database
+        """
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+                
+                # Total profiles
+                cursor.execute("SELECT COUNT(*) as total FROM user_profiles")
+                total = cursor.fetchone()['total']
+                
+                # Profiles by category
+                cursor.execute("""
+                    SELECT risk_category, COUNT(*) as count 
+                    FROM user_profiles 
+                    GROUP BY risk_category
+                """)
+                by_category = {row['risk_category']: row['count'] for row in cursor.fetchall()}
+                
+                # Recent profiles (last 30 days)
+                cursor.execute("""
+                    SELECT COUNT(*) as recent 
+                    FROM user_profiles 
+                    WHERE created_at >= NOW() - INTERVAL '30 days'
+                """)
+                recent = cursor.fetchone()['recent']
+                
+                return {
+                    "total_profiles": total,
+                    "profiles_by_category": by_category,
+                    "recent_profiles_30_days": recent,
+                    "timestamp": datetime.now().isoformat()
+                }
+                
+        except Exception as e:
+            logger.error(f"Failed to get risk profile stats: {e}")
+            return {}

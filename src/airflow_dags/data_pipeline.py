@@ -11,6 +11,8 @@ from airflow.utils.dates import days_ago
 from airflow.utils.task_group import TaskGroup
 
 from src.config import settings
+from src.data.collectors import MarketDataCollector, NewsCollector
+from src.data.database import DatabaseManager, MarketDataStorage, NewsStorage
 import logging
 
 logger = logging.getLogger(__name__)
@@ -45,7 +47,6 @@ def collect_market_data(**context) -> dict:
     Returns:
         dict: Collection status and metadata
     """
-    from src.data.collectors import MarketDataCollector
 
     execution_date = context["execution_date"]
     collector = MarketDataCollector()
@@ -84,8 +85,6 @@ def collect_news_sentiment(**context) -> dict:
     Returns:
         dict: Sentiment analysis results
     """
-    from src.data.collectors import NewsCollector
-
     execution_date = context["execution_date"]
     collector = NewsCollector()
 
@@ -154,8 +153,6 @@ def initialize_database(**context) -> dict:
     Returns:
         dict: Initialization results
     """
-    from src.data.database import DatabaseManager
-
     try:
         db_manager = DatabaseManager()
         db_manager.create_tables()
@@ -180,8 +177,6 @@ def store_processed_data(**context) -> dict:
     Returns:
         dict: Storage operation results
     """
-    from src.data.database import MarketDataStorage, NewsStorage
-
     execution_date = context["execution_date"]
 
     # Get validated data from previous tasks
