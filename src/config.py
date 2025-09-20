@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from pydantic import validator
+from pydantic import field_validator, ConfigDict
 from pydantic_settings import BaseSettings
 
 
@@ -64,23 +64,27 @@ class Settings(BaseSettings):
     data_staleness_minutes: int = 5  # 5 minutes for day trading
     price_movement_threshold: float = 0.10  # 10% price movement flag
 
-    @validator("max_risk_per_trade")
+    model_config = ConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        extra="ignore"  # Ignore extra environment variables
+    )
+
+    @field_validator("max_risk_per_trade")
+    @classmethod
     def validate_risk_per_trade(cls, v):
         """Validate risk per trade is within acceptable bounds."""
         if not 0.001 <= v <= 0.05:  # 0.1% to 5%
             raise ValueError("Risk per trade must be between 0.1% and 5%")
         return v
 
-    @validator("daily_loss_limit")
+    @field_validator("daily_loss_limit")
+    @classmethod
     def validate_daily_loss_limit(cls, v):
         """Validate daily loss limit is reasonable."""
         if not 0.01 <= v <= 0.20:  # 1% to 20%
             raise ValueError("Daily loss limit must be between 1% and 20%")
         return v
-
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
 
 
 # Global settings instance

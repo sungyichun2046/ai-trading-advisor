@@ -6,12 +6,10 @@ from datetime import datetime, timedelta
 from airflow.models import DagBag
 
 # Test imports
-from src.airflow_dags.data_pipeline import (
+from src.airflow_dags.data_collection_dag import (
     collect_market_data,
-    collect_news_sentiment,
-    initialize_database,
-    store_processed_data,
-    validate_data_quality
+    collect_news_data,
+    validate_data
 )
 
 
@@ -26,15 +24,15 @@ class TestDAGStructure:
         assert len(dag_bag.import_errors) == 0, f"DAG import errors: {dag_bag.import_errors}"
         
         # Check that our DAG is loaded
-        assert "data_collection_pipeline" in dag_bag.dags
+        assert "data_collection_dag" in dag_bag.dags
         
-        dag = dag_bag.get_dag("data_collection_pipeline")
+        dag = dag_bag.get_dag("data_collection_dag")
         assert dag is not None
 
     def test_dag_configuration(self):
         """Test DAG configuration and properties."""
         dag_bag = DagBag(dag_folder="src/airflow_dags", include_examples=False)
-        dag = dag_bag.get_dag("data_collection_pipeline")
+        dag = dag_bag.get_dag("data_collection_dag")
         
         # Test DAG properties
         assert dag.dag_id == "data_collection_pipeline"
@@ -49,7 +47,7 @@ class TestDAGStructure:
     def test_dag_tasks_structure(self):
         """Test DAG task structure and dependencies."""
         dag_bag = DagBag(dag_folder="src/airflow_dags", include_examples=False)
-        dag = dag_bag.get_dag("data_collection_pipeline")
+        dag = dag_bag.get_dag("data_collection_dag")
         
         # Expected tasks (accounting for TaskGroups)
         expected_tasks = [
@@ -69,7 +67,7 @@ class TestDAGStructure:
     def test_task_dependencies(self):
         """Test task dependencies are correct."""
         dag_bag = DagBag(dag_folder="src/airflow_dags", include_examples=False)
-        dag = dag_bag.get_dag("data_collection_pipeline")
+        dag = dag_bag.get_dag("data_collection_dag")
         
         # Get tasks (accounting for TaskGroups)
         init_db = dag.get_task("initialize_database")
@@ -317,7 +315,7 @@ class TestDAGExecution:
     def test_dag_execution_order(self):
         """Test that tasks execute in correct order."""
         dag_bag = DagBag(dag_folder="src/airflow_dags", include_examples=False)
-        dag = dag_bag.get_dag("data_collection_pipeline")
+        dag = dag_bag.get_dag("data_collection_dag")
         
         # Simulate DAG run
         from airflow.utils.state import DagRunState
@@ -343,7 +341,7 @@ class TestDAGExecution:
     def test_dag_timeout_configuration(self):
         """Test DAG timeout and retry configuration."""
         dag_bag = DagBag(dag_folder="src/airflow_dags", include_examples=False)
-        dag = dag_bag.get_dag("data_collection_pipeline")
+        dag = dag_bag.get_dag("data_collection_dag")
         
         # Check default args
         default_args = dag.default_args
@@ -354,7 +352,7 @@ class TestDAGExecution:
     def test_dag_failure_handling(self):
         """Test DAG failure handling configuration."""
         dag_bag = DagBag(dag_folder="src/airflow_dags", include_examples=False)
-        dag = dag_bag.get_dag("data_collection_pipeline")
+        dag = dag_bag.get_dag("data_collection_dag")
         
         # Check email notifications
         default_args = dag.default_args

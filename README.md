@@ -20,6 +20,45 @@ AI-powered trading advisor with dynamic risk management, multi-source data integ
 - Docker & Docker Compose
 - Git
 
+### **⚡ Quick Verification Checklist**
+
+```bash
+# Stop any running services
+docker-compose down
+
+# Start core services
+docker-compose up -d postgres redis airflow-webserver airflow-scheduler
+
+# Check all containers are running
+docker ps
+
+# Verify Airflow is accessible
+curl http://localhost:8080
+
+# List DAGs to confirm they're loaded
+make airflow-dags-list
+
+# Run full test suite
+make test-all
+```
+
+**Expected Results:**
+- ✅ 4 containers running (postgres, redis, airflow-webserver, airflow-scheduler)
+- ✅ Airflow returns HTTP 302 (redirect to login)
+- ✅ 8 DAGs listed (7 active, 1 paused)
+- ✅ 225+ tests passing
+- 
+#### Docker / Docker Compose
+
+This project uses Docker Compose.  
+
+- **Docker v2+**: use `docker compose <command>`  
+- **Older versions**: create an alias to keep using `docker-compose`:
+
+```bash
+alias docker-compose="docker compose"
+```
+
 ### Installation
 
 ```bash
@@ -67,14 +106,29 @@ sudo service docker start
 # OR sudo systemctl start docker
 # OR start Docker Desktop
 
+# Start Airflow with SQLite (fastest, no database dependencies)
+docker-compose up -d airflow
+
+# Wait 2-3 minutes for initialization, then check status
+docker ps
+
+# Test Airflow access (both should work)
+curl http://localhost:8080
+make airflow-dags-list
+```
+
+**Alternative automated setup:**
+```bash
 # Run complete setup with sample data
 make trigger-and-wait
 ```
 
-This single command will:
+This will:
 - ✅ Build all Docker containers
-- ✅ Start PostgreSQL, Redis, and all services
+- ✅ Start PostgreSQL, Redis, Airflow, and API services
 - ✅ Create database schema with all required tables
+- ✅ Initialize Airflow webserver at http://localhost:8080
+- ✅ Start FastAPI at http://localhost:8000
 - ✅ Populate sample trading data (market data, news, analysis, recommendations)
 - ✅ Verify everything is working
 
@@ -158,7 +212,7 @@ docker ps
 
 # Expected: PostgreSQL, Redis, and Airflow containers running
 # Test database connection
-docker exec ai-trading-advisor-postgres-1 pg_isready -U trader
+docker exec ai-trading-advisor_postgres_1 pg_isready -U trader
 ```
 
 #### 4. **Database Schema Verification**
