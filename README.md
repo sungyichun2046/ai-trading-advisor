@@ -36,7 +36,7 @@ docker ps
 curl http://localhost:8080
 
 # List DAGs to confirm they're loaded
-make airflow-dags-list
+docker compose exec airflow-scheduler airflow dags list
 
 # Run full test suite
 make test-all
@@ -448,13 +448,19 @@ make db-connect
 **Airflow DAGs not showing:**
 ```bash
 # Check DAG directory mount
-docker exec ai-trading-advisor-airflow-webserver-1 ls /opt/airflow/dags
+docker compose exec airflow-webserver ls /opt/airflow/dags
 
 # Check Airflow database status
 make airflow-db-check
 
-# List DAGs
-make airflow-dags-list
+# List DAGs (use correct service names)
+docker compose exec airflow-scheduler airflow dags list
+
+# Check for import errors
+docker compose exec airflow-scheduler airflow dags list-import-errors
+
+# View DAG details
+docker compose exec airflow-scheduler airflow dags details position_sizing_pipeline
 
 # View logs for errors
 make airflow-logs
@@ -664,8 +670,60 @@ make test-all
 
 - **API**: http://localhost:8000
 - **Airflow**: http://localhost:8080 (admin/admin)
-- **PostgreSQL**: localhost:5432 (trader/trader_password)
+- **PostgreSQL**: localhost:5432 (airflow/airflow)
 - **Redis**: localhost:6379
+
+### 🛠️ **Airflow Command Reference**
+
+The system uses Docker Compose with two Airflow services. Use the correct service names:
+
+#### **Available Airflow Services**
+- `airflow-scheduler` - Recommended for CLI commands
+- `airflow-webserver` - Also works for CLI commands
+
+#### **Essential Airflow Commands**
+```bash
+# List all DAGs
+docker compose exec airflow-scheduler airflow dags list
+
+# Check DAG details
+docker compose exec airflow-scheduler airflow dags details position_sizing_pipeline
+
+# Check for import errors
+docker compose exec airflow-scheduler airflow dags list-import-errors
+
+# Show DAG structure
+docker compose exec airflow-scheduler airflow dags show position_sizing_pipeline
+
+# List tasks in a DAG
+docker compose exec airflow-scheduler airflow tasks list position_sizing_pipeline
+
+# Pause/Unpause DAGs
+docker compose exec airflow-scheduler airflow dags pause position_sizing_pipeline
+docker compose exec airflow-scheduler airflow dags unpause position_sizing_pipeline
+
+# Trigger a DAG manually
+docker compose exec airflow-scheduler airflow dags trigger position_sizing_pipeline
+
+# Check DAG runs
+docker compose exec airflow-scheduler airflow dags state position_sizing_pipeline
+
+# View Airflow connections
+docker compose exec airflow-scheduler airflow connections list
+```
+
+#### **Common Issues & Solutions**
+```bash
+# Error: "service 'airflow' is not running"
+# ❌ Wrong: docker compose exec airflow airflow dags list
+# ✅ Correct: docker compose exec airflow-scheduler airflow dags list
+
+# Database authentication errors
+# Check .env file has: AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql://airflow:airflow@localhost:5432/airflow
+
+# Restart Airflow services
+docker compose restart airflow-scheduler airflow-webserver
+```
 
 ### Development Commands
 

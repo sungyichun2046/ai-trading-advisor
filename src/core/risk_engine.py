@@ -310,10 +310,21 @@ class RealTimePositionMonitor:
         """Initialize real-time position monitor."""
         self.sizing_engine = AdvancedPositionSizingEngine()
         self.risk_engine = RiskAnalysisEngine()
+        self.diversification_analyzer = DiversificationAnalyzer()
         self.last_update_time = None
         self.position_cache = {}
         self.market_data_cache = {}
+        self.portfolio_metrics_cache = {}
         self.rebalance_threshold = 0.10  # 10% difference triggers rebalance
+        self.alert_thresholds = {
+            "heat_warning": 0.25,  # 25% portfolio heat warning
+            "heat_critical": 0.30,  # 30% portfolio heat critical
+            "concentration_warning": 0.08,  # 8% single position warning
+            "concentration_critical": 0.10,  # 10% single position critical
+            "correlation_warning": 0.7,  # 70% average correlation warning
+            "volatility_spike": 1.5  # 50% increase in volatility
+        }
+        self.monitoring_active = False
         
     def update_market_data(self, market_data: Dict[str, Dict]) -> None:
         """Update cached market data for real-time calculations."""
@@ -513,7 +524,269 @@ class RealTimePositionMonitor:
         ) * 0.5  # Damping factor
         
         return min(1.0, base_heat + adjustment_impact)
+    
+    def start_monitoring(self) -> Dict[str, Any]:
+        """Start real-time monitoring with health checks."""
+        self.monitoring_active = True
         
+        # Perform initial health checks
+        health_status = self._perform_health_checks()
+        
+        logger.info("Real-time position monitoring started")
+        return {
+            "status": "monitoring_started",
+            "timestamp": datetime.now().isoformat(),
+            "health_status": health_status,
+            "alert_thresholds": self.alert_thresholds
+        }
+    
+    def stop_monitoring(self) -> Dict[str, Any]:
+        """Stop real-time monitoring."""
+        self.monitoring_active = False
+        
+        logger.info("Real-time position monitoring stopped")
+        return {
+            "status": "monitoring_stopped",
+            "timestamp": datetime.now().isoformat(),
+            "final_portfolio_metrics": self.portfolio_metrics_cache
+        }
+    
+    def _perform_health_checks(self) -> Dict[str, Any]:
+        """Perform comprehensive health checks on portfolio and monitoring system."""
+        health_status = {
+            "overall_status": "HEALTHY",
+            "checks_performed": [],
+            "warnings": [],
+            "errors": [],
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Check data availability
+        if not self.position_cache:
+            health_status["errors"].append("No portfolio positions cached")
+            health_status["overall_status"] = "ERROR"
+        else:
+            health_status["checks_performed"].append("portfolio_positions_available")
+            
+        if not self.market_data_cache:
+            health_status["errors"].append("No market data cached")
+            health_status["overall_status"] = "ERROR"
+        else:
+            health_status["checks_performed"].append("market_data_available")
+        
+        # Check portfolio health if data is available
+        if self.position_cache and self.market_data_cache:
+            try:
+                # Calculate current portfolio metrics
+                total_value = sum(pos.get('value', 0) for pos in self.position_cache.values())
+                
+                if total_value > 0:
+                    # Check concentration risk
+                    max_position_weight = max(
+                        pos.get('value', 0) / total_value for pos in self.position_cache.values()
+                    )
+                    
+                    if max_position_weight > self.alert_thresholds["concentration_critical"]:
+                        health_status["errors"].append(f"Critical concentration risk: {max_position_weight:.1%}")
+                        health_status["overall_status"] = "ERROR"
+                    elif max_position_weight > self.alert_thresholds["concentration_warning"]:
+                        health_status["warnings"].append(f"High concentration risk: {max_position_weight:.1%}")
+                        if health_status["overall_status"] == "HEALTHY":
+                            health_status["overall_status"] = "WARNING"
+                    
+                    health_status["checks_performed"].append("concentration_risk_check")
+                    
+                    # Check portfolio heat (simplified)
+                    portfolio_heat = self._calculate_simple_portfolio_heat()
+                    
+                    if portfolio_heat > self.alert_thresholds["heat_critical"]:
+                        health_status["errors"].append(f"Critical portfolio heat: {portfolio_heat:.1%}")
+                        health_status["overall_status"] = "ERROR"
+                    elif portfolio_heat > self.alert_thresholds["heat_warning"]:
+                        health_status["warnings"].append(f"High portfolio heat: {portfolio_heat:.1%}")
+                        if health_status["overall_status"] == "HEALTHY":
+                            health_status["overall_status"] = "WARNING"
+                    
+                    health_status["checks_performed"].append("portfolio_heat_check")
+                    
+                    # Check for volatility spikes
+                    volatility_alerts = self._check_volatility_spikes()
+                    if volatility_alerts:
+                        health_status["warnings"].extend(volatility_alerts)
+                        if health_status["overall_status"] == "HEALTHY":
+                            health_status["overall_status"] = "WARNING"
+                    
+                    health_status["checks_performed"].append("volatility_spike_check")
+                    
+            except Exception as e:
+                health_status["errors"].append(f"Health check calculation error: {str(e)}")
+                health_status["overall_status"] = "ERROR"
+        
+        return health_status
+    
+    def _calculate_simple_portfolio_heat(self) -> float:
+        """Calculate simplified portfolio heat from cached data."""
+        if not self.position_cache or not self.market_data_cache:
+            return 0.0
+            
+        total_value = sum(pos.get('value', 0) for pos in self.position_cache.values())
+        if total_value == 0:
+            return 0.0
+            
+        portfolio_heat = 0.0
+        for symbol, position in self.position_cache.items():
+            if symbol in self.market_data_cache:
+                position_weight = position.get('value', 0) / total_value
+                volatility = self.market_data_cache[symbol].get('volatility', 0.20)
+                position_heat = position_weight * volatility
+                portfolio_heat += position_heat
+                
+        return portfolio_heat
+    
+    def _check_volatility_spikes(self) -> List[str]:
+        """Check for significant volatility spikes."""
+        alerts = []
+        
+        for symbol, market_data in self.market_data_cache.items():
+            current_vol = market_data.get('volatility', 0.20)
+            # In a real implementation, you'd compare to historical volatility
+            # For now, we'll use a simple threshold
+            if current_vol > 0.35:  # 35% annualized volatility
+                alerts.append(f"{symbol} high volatility: {current_vol:.1%}")
+                
+        return alerts
+    
+    def generate_real_time_alerts(self) -> Dict[str, Any]:
+        """Generate real-time alerts based on current portfolio state."""
+        alerts = {
+            "timestamp": datetime.now().isoformat(),
+            "alert_level": "INFO",
+            "alerts": [],
+            "recommendations": [],
+            "immediate_actions_required": []
+        }
+        
+        if not self.monitoring_active:
+            alerts["alerts"].append("Real-time monitoring is not active")
+            return alerts
+            
+        try:
+            # Perform health checks
+            health_status = self._perform_health_checks()
+            
+            if health_status["overall_status"] == "ERROR":
+                alerts["alert_level"] = "CRITICAL"
+                alerts["alerts"].extend(health_status["errors"])
+                alerts["immediate_actions_required"].extend([
+                    "Review portfolio positions immediately",
+                    "Consider reducing position sizes",
+                    "Check risk management parameters"
+                ])
+                
+            elif health_status["overall_status"] == "WARNING":
+                alerts["alert_level"] = "WARNING"
+                alerts["alerts"].extend(health_status["warnings"])
+                alerts["recommendations"].extend([
+                    "Monitor portfolio closely",
+                    "Consider rebalancing if conditions persist",
+                    "Review position sizing parameters"
+                ])
+            
+            # Check for rebalancing opportunities
+            if len(self.position_cache) > 0 and len(self.market_data_cache) > 0:
+                rebalance_analysis = self.calculate_real_time_adjustments(
+                    portfolio_value=sum(pos.get('value', 0) for pos in self.position_cache.values()),
+                    trigger_threshold=self.rebalance_threshold
+                )
+                
+                if rebalance_analysis.get("status") == "success":
+                    adjustments = rebalance_analysis.get("adjustments", {})
+                    high_priority_count = sum(
+                        1 for adj in adjustments.values() if adj.get("urgency") == "HIGH"
+                    )
+                    
+                    if high_priority_count > 0:
+                        alerts["alert_level"] = max(alerts["alert_level"], "WARNING")
+                        alerts["alerts"].append(f"{high_priority_count} positions need high-priority rebalancing")
+                        alerts["recommendations"].append("Execute high-priority rebalancing actions")
+                    
+                    elif len(adjustments) > 0:
+                        alerts["recommendations"].append(f"{len(adjustments)} positions may benefit from rebalancing")
+                        
+        except Exception as e:
+            alerts["alert_level"] = "ERROR"
+            alerts["alerts"].append(f"Error generating alerts: {str(e)}")
+            alerts["immediate_actions_required"].append("Check monitoring system health")
+            
+        return alerts
+    
+    def get_real_time_dashboard_data(self) -> Dict[str, Any]:
+        """Get comprehensive real-time dashboard data."""
+        if not self.monitoring_active:
+            return {"status": "monitoring_inactive"}
+            
+        try:
+            total_value = sum(pos.get('value', 0) for pos in self.position_cache.values())
+            
+            # Current portfolio metrics
+            portfolio_metrics = {
+                "total_value": total_value,
+                "position_count": len(self.position_cache),
+                "heat_level": self._calculate_simple_portfolio_heat(),
+                "largest_position_pct": max(
+                    pos.get('value', 0) / total_value for pos in self.position_cache.values()
+                ) if total_value > 0 and self.position_cache else 0,
+                "cash_available": total_value * 0.1,  # Simplified assumption
+            }
+            
+            # Position analysis
+            position_analysis = {}
+            for symbol, position in self.position_cache.items():
+                if symbol in self.market_data_cache:
+                    market_data = self.market_data_cache[symbol]
+                    current_price = market_data.get('price', position.get('avg_cost', 100))
+                    
+                    position_analysis[symbol] = {
+                        "current_value": position.get('value', 0),
+                        "weight": position.get('value', 0) / total_value if total_value > 0 else 0,
+                        "current_price": current_price,
+                        "daily_change": market_data.get('daily_change', 0),
+                        "volatility": market_data.get('volatility', 0.20),
+                        "unrealized_pnl": (current_price - position.get('avg_cost', current_price)) * position.get('shares', 0)
+                    }
+            
+            # Risk metrics
+            risk_metrics = {
+                "portfolio_heat": portfolio_metrics["heat_level"],
+                "concentration_risk": "HIGH" if portfolio_metrics["largest_position_pct"] > 0.10 else 
+                                   "MEDIUM" if portfolio_metrics["largest_position_pct"] > 0.08 else "LOW",
+                "volatility_status": "HIGH" if any(
+                    data.get('volatility', 0) > 0.30 for data in self.market_data_cache.values()
+                ) else "NORMAL"
+            }
+            
+            # Alerts
+            alerts = self.generate_real_time_alerts()
+            
+            return {
+                "status": "active",
+                "timestamp": datetime.now().isoformat(),
+                "portfolio_metrics": portfolio_metrics,
+                "position_analysis": position_analysis,
+                "risk_metrics": risk_metrics,
+                "alerts": alerts,
+                "monitoring_health": self._perform_health_checks(),
+                "last_update": self.last_update_time.isoformat() if self.last_update_time else None
+            }
+            
+        except Exception as e:
+            logger.error(f"Error generating dashboard data: {e}")
+            return {
+                "status": "error",
+                "timestamp": datetime.now().isoformat(),
+                "error_message": str(e)
+            }
+    
     def get_monitoring_status(self) -> Dict:
         """Get current monitoring status and health metrics."""
         return {
@@ -550,6 +823,228 @@ class RealTimePositionMonitor:
             return False
 
 
+class DiversificationAnalyzer:
+    """Analyzes portfolio diversification and concentration risk."""
+    
+    def __init__(self):
+        """Initialize diversification analyzer."""
+        self.max_single_position = 0.10  # 10% max per position
+        self.max_sector_exposure = 0.30  # 30% max per sector
+        self.min_positions = 8  # Minimum positions for diversification
+        self.max_positions = 20  # Maximum positions before over-diversification
+        
+    def analyze_diversification(
+        self, 
+        positions: Dict[str, Dict],
+        correlation_matrix: np.ndarray = None
+    ) -> Dict[str, any]:
+        """Analyze portfolio diversification metrics."""
+        if not positions:
+            return {"status": "empty_portfolio", "diversification_score": 0.0}
+            
+        total_value = sum(pos.get('value', 0) for pos in positions.values())
+        if total_value == 0:
+            return {"status": "zero_value", "diversification_score": 0.0}
+            
+        # Calculate position weights
+        weights = {symbol: pos.get('value', 0) / total_value for symbol, pos in positions.items()}
+        
+        # Concentration metrics
+        concentration_metrics = self._calculate_concentration_metrics(weights)
+        
+        # Sector diversification
+        sector_metrics = self._analyze_sector_diversification(positions)
+        
+        # Correlation-based diversification
+        correlation_metrics = self._analyze_correlation_diversification(
+            positions, correlation_matrix
+        )
+        
+        # Overall diversification score
+        diversification_score = self._calculate_diversification_score(
+            concentration_metrics, sector_metrics, correlation_metrics
+        )
+        
+        return {
+            "status": "success",
+            "diversification_score": diversification_score,
+            "concentration_metrics": concentration_metrics,
+            "sector_metrics": sector_metrics,
+            "correlation_metrics": correlation_metrics,
+            "recommendations": self._generate_diversification_recommendations(
+                concentration_metrics, sector_metrics, diversification_score
+            )
+        }
+        
+    def _calculate_concentration_metrics(self, weights: Dict[str, float]) -> Dict[str, any]:
+        """Calculate concentration risk metrics."""
+        weight_values = list(weights.values())
+        
+        # Herfindahl-Hirschman Index (HHI)
+        hhi = sum(w ** 2 for w in weight_values)
+        
+        # Top 3 concentration
+        sorted_weights = sorted(weight_values, reverse=True)
+        top3_concentration = sum(sorted_weights[:3]) if len(sorted_weights) >= 3 else sum(sorted_weights)
+        
+        # Effective number of positions (1/HHI)
+        effective_positions = 1.0 / hhi if hhi > 0 else 0
+        
+        # Largest position weight
+        max_position_weight = max(weight_values) if weight_values else 0
+        
+        return {
+            "herfindahl_index": hhi,
+            "effective_positions": effective_positions,
+            "top3_concentration": top3_concentration,
+            "max_position_weight": max_position_weight,
+            "position_count": len(weight_values),
+            "concentration_risk": "HIGH" if hhi > 0.25 else "MEDIUM" if hhi > 0.125 else "LOW"
+        }
+        
+    def _analyze_sector_diversification(self, positions: Dict[str, Dict]) -> Dict[str, any]:
+        """Analyze sector-level diversification."""
+        # Simplified sector mapping - in production, use real sector data
+        sector_map = {
+            'AAPL': 'Technology', 'MSFT': 'Technology', 'GOOGL': 'Technology', 'AMZN': 'Technology',
+            'TSLA': 'Technology', 'NVDA': 'Technology', 'META': 'Technology',
+            'JPM': 'Financial', 'BAC': 'Financial', 'WFC': 'Financial', 'GS': 'Financial',
+            'JNJ': 'Healthcare', 'PFE': 'Healthcare', 'UNH': 'Healthcare', 'ABBV': 'Healthcare',
+            'XOM': 'Energy', 'CVX': 'Energy', 'COP': 'Energy',
+            'WMT': 'Consumer', 'PG': 'Consumer', 'KO': 'Consumer', 'PEP': 'Consumer'
+        }
+        
+        sector_exposure = {}
+        total_value = sum(pos.get('value', 0) for pos in positions.values())
+        
+        for symbol, position in positions.items():
+            sector = sector_map.get(symbol, 'Other')
+            value = position.get('value', 0)
+            sector_exposure[sector] = sector_exposure.get(sector, 0) + value
+            
+        # Convert to percentages
+        sector_weights = {
+            sector: value / total_value for sector, value in sector_exposure.items()
+        } if total_value > 0 else {}
+        
+        # Check for over-concentration
+        max_sector_exposure = max(sector_weights.values()) if sector_weights else 0
+        sector_count = len(sector_weights)
+        
+        return {
+            "sector_weights": sector_weights,
+            "sector_count": sector_count,
+            "max_sector_exposure": max_sector_exposure,
+            "sector_hhi": sum(w ** 2 for w in sector_weights.values()),
+            "sector_risk": "HIGH" if max_sector_exposure > 0.5 else "MEDIUM" if max_sector_exposure > 0.3 else "LOW"
+        }
+        
+    def _analyze_correlation_diversification(
+        self, 
+        positions: Dict[str, Dict],
+        correlation_matrix: np.ndarray = None
+    ) -> Dict[str, any]:
+        """Analyze correlation-based diversification."""
+        if correlation_matrix is None or correlation_matrix.size == 0:
+            return {
+                "average_correlation": 0.3,  # Default assumption
+                "correlation_risk": "UNKNOWN",
+                "effective_diversification": 0.7
+            }
+            
+        # Calculate average pairwise correlation
+        if correlation_matrix.shape[0] > 1:
+            upper_triangle = correlation_matrix[np.triu_indices_from(correlation_matrix, k=1)]
+            avg_correlation = np.mean(upper_triangle)
+            max_correlation = np.max(upper_triangle)
+            min_correlation = np.min(upper_triangle)
+        else:
+            avg_correlation = max_correlation = min_correlation = 0.0
+            
+        # Effective diversification ratio
+        effective_diversification = 1.0 - abs(avg_correlation)
+        
+        return {
+            "average_correlation": avg_correlation,
+            "max_correlation": max_correlation,
+            "min_correlation": min_correlation,
+            "effective_diversification": effective_diversification,
+            "correlation_risk": "HIGH" if abs(avg_correlation) > 0.7 else "MEDIUM" if abs(avg_correlation) > 0.4 else "LOW"
+        }
+        
+    def _calculate_diversification_score(
+        self,
+        concentration_metrics: Dict,
+        sector_metrics: Dict,
+        correlation_metrics: Dict
+    ) -> float:
+        """Calculate overall diversification score (0-1, higher is better)."""
+        # Position concentration component (0-1)
+        position_score = min(1.0, concentration_metrics['effective_positions'] / 10.0)
+        
+        # Sector diversification component (0-1)
+        sector_score = min(1.0, sector_metrics['sector_count'] / 8.0)
+        sector_score *= (1.0 - sector_metrics['max_sector_exposure'])  # Penalty for concentration
+        
+        # Correlation diversification component (0-1)
+        correlation_score = correlation_metrics['effective_diversification']
+        
+        # Weighted average
+        diversification_score = (
+            position_score * 0.4 +
+            sector_score * 0.3 +
+            correlation_score * 0.3
+        )
+        
+        return min(1.0, max(0.0, diversification_score))
+        
+    def _generate_diversification_recommendations(
+        self,
+        concentration_metrics: Dict,
+        sector_metrics: Dict,
+        diversification_score: float
+    ) -> List[str]:
+        """Generate diversification improvement recommendations."""
+        recommendations = []
+        
+        # Position concentration recommendations
+        if concentration_metrics['max_position_weight'] > self.max_single_position:
+            recommendations.append(
+                f"Reduce largest position from {concentration_metrics['max_position_weight']:.1%} "
+                f"to below {self.max_single_position:.1%}"
+            )
+            
+        if concentration_metrics['position_count'] < self.min_positions:
+            recommendations.append(
+                f"Increase number of positions from {concentration_metrics['position_count']} "
+                f"to at least {self.min_positions} for better diversification"
+            )
+            
+        # Sector concentration recommendations
+        if sector_metrics['max_sector_exposure'] > self.max_sector_exposure:
+            recommendations.append(
+                f"Reduce sector concentration from {sector_metrics['max_sector_exposure']:.1%} "
+                f"to below {self.max_sector_exposure:.1%}"
+            )
+            
+        if sector_metrics['sector_count'] < 4:
+            recommendations.append(
+                "Consider adding positions in different sectors for better diversification"
+            )
+            
+        # Overall score recommendations
+        if diversification_score < 0.6:
+            recommendations.append(
+                "Portfolio shows poor diversification - consider rebalancing across sectors and positions"
+            )
+        elif diversification_score < 0.8:
+            recommendations.append(
+                "Portfolio diversification can be improved - review position and sector weights"
+            )
+            
+        return recommendations
+
+
 class AdvancedPositionSizingEngine:
     """Advanced position sizing engine with multiple algorithms."""
 
@@ -558,6 +1053,10 @@ class AdvancedPositionSizingEngine:
         self.risk_config = RiskConfig()
         self.min_position_size = 100.0  # Minimum $100 position
         self.max_position_size_pct = 0.10  # Maximum 10% of portfolio
+        self.max_heat_threshold = 0.30  # Maximum portfolio heat
+        self.volatility_lookback = 20  # Days for volatility calculation
+        self.correlation_threshold = 0.7  # High correlation threshold
+        self.diversification_analyzer = DiversificationAnalyzer()
 
     def get_portfolio_status(self) -> Dict:
         """Get current portfolio status."""
@@ -652,21 +1151,50 @@ class AdvancedPositionSizingEngine:
     def calculate_portfolio_heat(
         self, 
         portfolio_metrics: PortfolioMetrics,
-        new_position_risk: float
-    ) -> float:
+        new_position_risk: float,
+        correlation_matrix: np.ndarray = None
+    ) -> Dict[str, float]:
         """Calculate portfolio heat after adding new position.
         
         Portfolio heat measures the total risk exposure across all positions.
+        Returns detailed heat analysis including correlation effects.
         """
         current_heat = portfolio_metrics.heat_level
         
         # Calculate heat contribution of new position
         position_heat = new_position_risk / portfolio_metrics.total_value
         
-        # Add correlation effects (simplified)
-        total_heat = current_heat + position_heat
+        # Simple additive heat
+        simple_heat = current_heat + position_heat
         
-        return min(total_heat, 1.0)
+        # Correlation-adjusted heat (more sophisticated)
+        if correlation_matrix is not None and correlation_matrix.size > 0:
+            # Use portfolio theory to calculate diversified heat
+            avg_correlation = np.mean(correlation_matrix[np.triu_indices_from(correlation_matrix, k=1)])
+            diversification_factor = 1.0 - (avg_correlation * 0.5)  # Reduce heat based on diversification
+            correlation_adjusted_heat = simple_heat * diversification_factor
+        else:
+            correlation_adjusted_heat = simple_heat * 0.8  # Default 20% diversification benefit
+        
+        # Risk-parity adjusted heat
+        position_count = len(portfolio_metrics.current_positions) + 1  # +1 for new position
+        equal_weight_heat = position_heat * position_count  # If equally weighted
+        concentration_penalty = max(1.0, equal_weight_heat / simple_heat)  # Penalty for concentration
+        
+        risk_parity_heat = simple_heat * min(concentration_penalty, 1.5)  # Cap penalty at 50%
+        
+        return {
+            "simple_heat": min(simple_heat, 1.0),
+            "correlation_adjusted_heat": min(correlation_adjusted_heat, 1.0),
+            "risk_parity_heat": min(risk_parity_heat, 1.0),
+            "recommended_heat": min(correlation_adjusted_heat, 1.0),
+            "heat_breakdown": {
+                "current_heat": current_heat,
+                "new_position_heat": position_heat,
+                "diversification_benefit": simple_heat - correlation_adjusted_heat,
+                "concentration_penalty": risk_parity_heat - simple_heat
+            }
+        }
 
     def calculate_optimal_position_size(
         self,
@@ -710,9 +1238,11 @@ class AdvancedPositionSizingEngine:
             
             # Calculate potential heat from this position
             potential_risk = vol_adjusted_size * params.stop_loss_pct
-            projected_heat = self.calculate_portfolio_heat(
-                portfolio_metrics, potential_risk
+            heat_analysis = self.calculate_portfolio_heat(
+                portfolio_metrics, potential_risk, portfolio_metrics.portfolio_correlation_matrix
             )
+            
+            projected_heat = heat_analysis["recommended_heat"]
             
             # Reduce size if heat is too high
             if projected_heat > portfolio_metrics.max_heat_threshold:
@@ -742,6 +1272,27 @@ class AdvancedPositionSizingEngine:
         position_risk = actual_size * params.stop_loss_pct
         risk_percentage = position_risk / portfolio_metrics.total_value
         
+        # Calculate portfolio heat impact
+        heat_analysis = self.calculate_portfolio_heat(
+            portfolio_metrics, position_risk, portfolio_metrics.portfolio_correlation_matrix
+        )
+        
+        # Analyze diversification impact
+        test_positions = portfolio_metrics.current_positions.copy()
+        test_positions[params.symbol] = {"value": actual_size}
+        diversification_analysis = self.diversification_analyzer.analyze_diversification(
+            test_positions, portfolio_metrics.portfolio_correlation_matrix
+        )
+        
+        # Generate warnings
+        warnings = []
+        if risk_percentage > 0.02:  # More than 2% risk
+            warnings.append(f"Position risk {risk_percentage:.1%} exceeds 2% threshold")
+        if heat_analysis["recommended_heat"] > self.max_heat_threshold:
+            warnings.append(f"Portfolio heat {heat_analysis['recommended_heat']:.1%} exceeds {self.max_heat_threshold:.1%} threshold")
+        if actual_size / portfolio_metrics.total_value > self.max_position_size_pct:
+            warnings.append(f"Position size {actual_size / portfolio_metrics.total_value:.1%} exceeds {self.max_position_size_pct:.1%} limit")
+        
         return {
             "symbol": params.symbol,
             "method": method.value,
@@ -753,8 +1304,15 @@ class AdvancedPositionSizingEngine:
             "price_per_share": params.current_price,
             "stop_loss_price": params.current_price * (1 - params.stop_loss_pct),
             "portfolio_weight": actual_size / portfolio_metrics.total_value,
-            "is_valid": True,
-            "warnings": []
+            "heat_analysis": heat_analysis,
+            "diversification_impact": {
+                "current_score": diversification_analysis.get("diversification_score", 0.5),
+                "concentration_risk": diversification_analysis.get("concentration_metrics", {}).get("concentration_risk", "UNKNOWN"),
+                "sector_risk": diversification_analysis.get("sector_metrics", {}).get("sector_risk", "UNKNOWN")
+            },
+            "is_valid": len(warnings) == 0,
+            "warnings": warnings,
+            "recommendations": diversification_analysis.get("recommendations", [])
         }
 
     def _calculate_sector_exposure(
