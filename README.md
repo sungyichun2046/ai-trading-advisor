@@ -35,6 +35,24 @@ docker ps
 # Verify Airflow is accessible
 curl http://localhost:8080
 
+🎯 **RECOMMENDED: Get webserver-accurate status (no triggering):**
+./webserver_status_check.sh
+
+📊 **Full DAG execution + webserver-accurate status check:**
+./check_all_dags.sh
+
+Both scripts now use enhanced detection that:
+✅ Detects import errors immediately
+✅ Validates task-level success (not just DAG state) 
+✅ Matches Airflow webserver exactly
+✅ Prevents false positives from old quick_dag_status.sh
+
+Manual trigger specific DAG:
+docker compose exec airflow-scheduler airflow dags trigger [dag_name]
+
+Check specific DAG status:
+docker compose exec airflow-scheduler airflow dags state [dag_name] $(date +%Y-%m-%d)
+
 # List DAGs to confirm they're loaded
 docker compose exec airflow-scheduler airflow dags list
 
