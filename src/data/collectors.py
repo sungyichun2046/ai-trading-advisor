@@ -213,6 +213,9 @@ class MarketDataCollector:
 
     def collect_historical_data(self, symbol: str, period: str = "1mo") -> Optional[pd.DataFrame]:
         """Collect historical data for analysis."""
+        if not settings.use_real_data:
+            return self._generate_dummy_historical_data(symbol, period)
+            
         try:
             ticker = yf.Ticker(symbol)
             hist = ticker.history(period=period, interval="15m")
@@ -220,6 +223,71 @@ class MarketDataCollector:
         except Exception as e:
             logger.error(f"Failed to collect historical data for {symbol}: {e}")
             return None
+    
+    def _generate_dummy_historical_data(self, symbol: str, period: str = "1mo"):
+        """Generate dummy historical data for development/testing."""
+        import random
+        from datetime import datetime, timedelta
+        
+        # Use global pd for now - the MockDataFrame should handle this
+        real_pd = pd
+        
+        # Determine number of data points based on period
+        period_map = {
+            "1d": 96,    # 15-min intervals in 1 day
+            "5d": 480,   # 15-min intervals in 5 days
+            "1mo": 672,  # 15-min intervals in ~1 month (28 days)
+            "3mo": 2016, # 15-min intervals in ~3 months
+            "6mo": 4032, # 15-min intervals in ~6 months
+            "1y": 8064   # 15-min intervals in ~1 year
+        }
+        
+        num_points = period_map.get(period, 672)  # Default to 1 month
+        
+        # Base prices for different symbols
+        base_prices = {
+            "SPY": 450.0, "QQQ": 380.0, "AAPL": 180.0, "MSFT": 340.0,
+            "TSLA": 240.0, "GOOGL": 140.0, "AMZN": 150.0, "META": 320.0
+        }
+        
+        base_price = base_prices.get(symbol, 100.0)
+        
+        # Generate time series
+        end_time = datetime.now()
+        start_time = end_time - timedelta(minutes=15 * num_points)
+        timestamps = real_pd.date_range(start=start_time, end=end_time, freq='15min')
+        
+        # Generate price data with some trend and volatility
+        prices = []
+        current_price = base_price
+        
+        for i in range(len(timestamps)):
+            # Add some random walk with slight upward bias
+            change = random.uniform(-0.02, 0.025)  # Slight positive bias
+            current_price *= (1 + change)
+            prices.append(current_price)
+        
+        # Create OHLC data
+        data = []
+        for i, price in enumerate(prices):
+            # Generate realistic OHLC from the base price
+            volatility = random.uniform(0.005, 0.02)  # 0.5% to 2% volatility
+            
+            open_price = price * (1 + random.uniform(-volatility/2, volatility/2))
+            close_price = price * (1 + random.uniform(-volatility/2, volatility/2))
+            high_price = max(open_price, close_price) * (1 + random.uniform(0, volatility))
+            low_price = min(open_price, close_price) * (1 - random.uniform(0, volatility))
+            volume = random.randint(100000, 2000000)
+            
+            data.append({
+                'Open': round(open_price, 2),
+                'High': round(high_price, 2),
+                'Low': round(low_price, 2),
+                'Close': round(close_price, 2),
+                'Volume': volume
+            })
+        
+        return real_pd.DataFrame(data, index=timestamps[:len(data)])
 
 
 class NewsCollector:

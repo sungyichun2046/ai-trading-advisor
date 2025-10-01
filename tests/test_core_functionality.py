@@ -110,56 +110,36 @@ class TestDataValidationLogic:
 class TestPipelineFunctions:
     """Test pipeline functions with mocked dependencies."""
 
-    @patch('src.airflow_dags.data_pipeline.MarketDataCollector')
-    def test_collect_market_data_structure(self, mock_collector_class):
+    def test_collect_market_data_structure(self):
         """Test market data collection function structure."""
         # Import inside test to avoid dependency issues
         try:
-            from src.airflow_dags.data_pipeline import collect_market_data
-            
-            # Mock collector
-            mock_collector = Mock()
-            mock_collector.collect_real_time_data.return_value = {
-                "symbol": "AAPL",
-                "status": "success",
-                "price": 150.0
-            }
-            mock_collector_class.return_value = mock_collector
+            from src.airflow_dags.data_collection_dag import collect_market_data
             
             # Test context
             context = {"execution_date": datetime(2024, 1, 1, 10, 0, 0)}
             
             result = collect_market_data(**context)
             
-            # Verify structure
-            assert isinstance(result, dict)
-            assert len(result) > 0
+            # Verify structure (should return a string for the simplified version)
+            assert isinstance(result, str)
+            assert "Market data collected successfully" in result
             
         except ImportError as e:
             pytest.skip(f"Skipping due to missing dependencies: {e}")
 
-    @patch('src.airflow_dags.data_pipeline.NewsCollector')
-    def test_collect_news_sentiment_structure(self, mock_collector_class):
-        """Test news sentiment collection function structure."""
+    def test_collect_news_sentiment_structure(self):
+        """Test news data collection function structure."""
         try:
-            from src.airflow_dags.data_pipeline import collect_news_sentiment
-            
-            # Mock collector
-            mock_collector = Mock()
-            mock_collector.collect_financial_news.return_value = []
-            mock_collector.analyze_sentiment.return_value = {
-                "status": "success",
-                "average": 0.5
-            }
-            mock_collector_class.return_value = mock_collector
+            from src.airflow_dags.data_collection_dag import collect_news_data
             
             context = {"execution_date": datetime(2024, 1, 1, 10, 0, 0)}
             
-            result = collect_news_sentiment(**context)
+            result = collect_news_data(**context)
             
-            # Verify structure
-            assert isinstance(result, dict)
-            assert "status" in result
+            # Verify structure (should return a string for the simplified version)
+            assert isinstance(result, str)
+            assert "News data collected successfully" in result
             
         except ImportError as e:
             pytest.skip(f"Skipping due to missing dependencies: {e}")
@@ -299,7 +279,7 @@ class TestIntegrationReadiness:
         """Test that DAG files exist and have basic structure."""
         import os
         
-        dag_file = "src/airflow_dags/data_pipeline.py"
+        dag_file = "src/airflow_dags/data_collection_dag.py"
         assert os.path.exists(dag_file), "DAG file should exist"
         
         # Read file and check for key components
@@ -308,9 +288,9 @@ class TestIntegrationReadiness:
             
         required_components = [
             "def collect_market_data",
-            "def collect_news_sentiment", 
-            "def store_processed_data",
-            "data_collection_pipeline"
+            "def collect_news_data", 
+            "def validate_data",
+            "data_collection_dag"
         ]
         
         for component in required_components:
