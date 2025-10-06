@@ -1,6 +1,42 @@
 #!/bin/bash
 # Enhanced Webserver-Accurate DAG Status Report with Auto-Activation and Testing
 
+# Function to wait for DAG completion with retries
+wait_for_dag_completion() {
+    local dag=$1
+    local run_id=$2
+    local max_wait=180  # 3 minutes max wait
+    local check_interval=15  # Check every 15 seconds
+    local elapsed=0
+    
+    echo "  ⏳ Waiting for DAG tasks to complete (max ${max_wait}s)..."
+    
+    while [[ $elapsed -lt $max_wait ]]; do
+        sleep $check_interval
+        elapsed=$((elapsed + check_interval))
+        
+        # Check current task states
+        task_states=$(docker compose exec airflow-scheduler bash -c "airflow tasks states-for-dag-run $dag $run_id" 2>/dev/null | tail -n +3 | grep -v "^=" | grep -v "time=" | grep "| success\|| failed\|| running\|| queued" || echo "")
+        
+        if [[ -n "$task_states" ]]; then
+            running_tasks=$(echo "$task_states" | grep -c "running" || echo "0")
+            queued_tasks=$(echo "$task_states" | grep -c "queued" || echo "0")
+            
+            if [[ $running_tasks -eq 0 && $queued_tasks -eq 0 ]]; then
+                echo "  ✅ All tasks completed after ${elapsed}s"
+                return 0
+            fi
+            
+            echo "  🔄 Still running... (${elapsed}s elapsed, $running_tasks running, $queued_tasks queued)"
+        else
+            echo "  ⚠️  No task data yet (${elapsed}s elapsed)"
+        fi
+    done
+    
+    echo "  ⏰ Timeout reached after ${max_wait}s - tasks may still be completing"
+    return 1
+}
+
 echo "🚀 ENHANCED DAG STATUS REPORT WITH AUTO-ACTIVATION"
 echo "=================================================="
 
@@ -63,9 +99,9 @@ for dag in $ALL_DAGS; do
             echo "  ✅ Successfully triggered: $dag"
             activated_dags+=($dag)
             
-            # Step 3: Wait briefly for task to start
-            echo "  ⏳ Waiting 10 seconds for DAG to initialize..."
-            sleep 10
+            # Step 3: Wait for task to start with progressive waiting
+            echo "  ⏳ Waiting for DAG to initialize..."
+            sleep 15
             
             # Step 4: Check if run was created
             new_run=$(docker compose exec airflow-scheduler bash -c "airflow dags list-runs -d $dag -o plain" | tail -n +2 | head -1 | awk '{print $2}')
@@ -74,34 +110,57 @@ for dag in $ALL_DAGS; do
                 echo "  ✅ Run created successfully: $new_run"
                 tested_dags+=($dag)
                 
-                # Check initial task states
-                task_states=$(docker compose exec airflow-scheduler bash -c "airflow tasks states-for-dag-run $dag $new_run" 2>/dev/null | tail -n +3 | grep -v "^=" | grep -v "time=" | grep "| success\|| failed\|| running\|| queued" || echo "")
-                
-                if [[ -n "$task_states" ]]; then
-                    total_tasks=$(echo "$task_states" | wc -l)
-                    success_tasks=$(echo "$task_states" | grep -c "success" || echo "0")
-                    failed_tasks=$(echo "$task_states" | grep -c "failed" || echo "0")
-                    running_tasks=$(echo "$task_states" | grep -c "running" || echo "0")
-                    queued_tasks=$(echo "$task_states" | grep -c "queued" || echo "0")
+                # Wait for DAG completion with retries
+                if wait_for_dag_completion "$dag" "$new_run"; then
+                    # Check final task states after completion
+                    task_states=$(docker compose exec airflow-scheduler bash -c "airflow tasks states-for-dag-run $dag $new_run" 2>/dev/null | tail -n +3 | grep -v "^=" | grep -v "time=" | grep "| success\|| failed\|| running\|| queued" || echo "")
                     
-                    echo "  📊 Initial Status: $success_tasks success, $failed_tasks failed, $running_tasks running, $queued_tasks queued (total: $total_tasks)"
-                    
-                    if [[ $failed_tasks -gt 0 ]]; then
-                        echo "  ❌ SOME TASKS FAILED IMMEDIATELY"
-                        ((failed++))
-                    elif [[ $running_tasks -gt 0 || $queued_tasks -gt 0 ]]; then
-                        echo "  🔄 RUNNING (will complete soon)"
-                        ((running++))
-                    elif [[ $success_tasks -eq $total_tasks && $total_tasks -gt 0 ]]; then
-                        echo "  🎉 ALL TASKS COMPLETED SUCCESSFULLY"
-                        ((successful++))
+                    if [[ -n "$task_states" ]]; then
+                        total_tasks=$(echo "$task_states" | wc -l)
+                        success_tasks=$(echo "$task_states" | grep -c "success" || echo "0")
+                        failed_tasks=$(echo "$task_states" | grep -c "failed" || echo "0")
+                        running_tasks=$(echo "$task_states" | grep -c "running" || echo "0")
+                        queued_tasks=$(echo "$task_states" | grep -c "queued" || echo "0")
+                        
+                        echo "  📊 Final Status: $success_tasks success, $failed_tasks failed, $running_tasks running, $queued_tasks queued (total: $total_tasks)"
+                        
+                        if [[ $failed_tasks -gt 0 ]]; then
+                            echo "  ❌ SOME TASKS FAILED"
+                            ((failed++))
+                        elif [[ $success_tasks -eq $total_tasks && $total_tasks -gt 0 ]]; then
+                            echo "  🎉 ALL TASKS COMPLETED SUCCESSFULLY"
+                            ((successful++))
+                        elif [[ $running_tasks -gt 0 || $queued_tasks -gt 0 ]]; then
+                            echo "  🔄 STILL RUNNING (may need more time)"
+                            ((running++))
+                        else
+                            echo "  ⚠️  INCOMPLETE STATUS"
+                            ((unknown++))
+                        fi
                     else
-                        echo "  ⚠️  PARTIAL COMPLETION"
+                        echo "  ⚠️  No task states available after wait"
                         ((unknown++))
                     fi
                 else
-                    echo "  ⚠️  No task states available yet (may need more time)"
-                    ((unknown++))
+                    # Timeout occurred, check current status
+                    echo "  ⏰ DAG timed out, checking current status..."
+                    task_states=$(docker compose exec airflow-scheduler bash -c "airflow tasks states-for-dag-run $dag $new_run" 2>/dev/null | tail -n +3 | grep -v "^=" | grep -v "time=" | grep "| success\|| failed\|| running\|| queued" || echo "")
+                    
+                    if [[ -n "$task_states" ]]; then
+                        running_tasks=$(echo "$task_states" | grep -c "running" || echo "0")
+                        queued_tasks=$(echo "$task_states" | grep -c "queued" || echo "0")
+                        
+                        if [[ $running_tasks -gt 0 || $queued_tasks -gt 0 ]]; then
+                            echo "  🔄 STILL RUNNING (timeout but progressing)"
+                            ((running++))
+                        else
+                            echo "  ⚠️  TIMEOUT - STATUS UNCLEAR"
+                            ((unknown++))
+                        fi
+                    else
+                        echo "  ❌ TIMEOUT WITH NO STATUS"
+                        ((failed++))
+                    fi
                 fi
             else
                 echo "  ❌ Failed to create run after triggering"
@@ -134,8 +193,22 @@ for dag in $ALL_DAGS; do
         echo "❌ FAILED ($failed_tasks/$total_tasks tasks failed)"
         ((failed++))
     elif [[ $running_tasks -gt 0 ]]; then
-        echo "🔄 RUNNING ($running_tasks/$total_tasks tasks running)"
-        ((running++))
+        echo "🔄 RUNNING ($running_tasks/$total_tasks tasks running) - checking again in a moment..."
+        # Brief wait for running tasks
+        sleep 5
+        
+        # Re-check after brief wait
+        updated_task_states=$(docker compose exec airflow-scheduler bash -c "airflow tasks states-for-dag-run $dag $recent_run" | tail -n +3 | grep -v "^=" | grep -v "time=" | grep "| success\|| failed\|| running")
+        updated_running=$(echo "$updated_task_states" | grep -c "running" || echo "0")
+        updated_success=$(echo "$updated_task_states" | grep -c "success" || echo "0")
+        
+        if [[ $updated_running -eq 0 && $updated_success -eq $total_tasks ]]; then
+            echo "  ✅ Just completed! SUCCESS ($updated_success/$total_tasks tasks completed)"
+            ((successful++))
+        else
+            echo "  🔄 Still running ($updated_running tasks)"
+            ((running++))
+        fi
     elif [[ $success_tasks -eq $total_tasks && $total_tasks -gt 0 ]]; then
         echo "✅ SUCCESS ($success_tasks/$total_tasks tasks completed)"
         ((successful++))
@@ -181,6 +254,46 @@ fi
 
 if [[ $never_executed_count -gt 0 ]]; then
     echo "⚠️  Never Executed (now activated): $never_executed_count"
+fi
+
+# Final check for any remaining running DAGs
+if [[ $running -gt 0 ]]; then
+    echo ""
+    echo "🔄 FINAL CHECK: $running DAGs still running, waiting 30 seconds for completion..."
+    sleep 30
+    
+    # Re-check running DAGs
+    final_successful=0
+    final_running=0
+    
+    for dag in $ALL_DAGS; do
+        recent_run=$(docker compose exec airflow-scheduler bash -c "airflow dags list-runs -d $dag -o plain" | tail -n +2 | head -1 | awk '{print $2}')
+        
+        if [[ -n "$recent_run" && "$recent_run" != "No data found" ]]; then
+            task_states=$(docker compose exec airflow-scheduler bash -c "airflow tasks states-for-dag-run $dag $recent_run" | tail -n +3 | grep -v "^=" | grep -v "time=" | grep "| success\|| failed\|| running" 2>/dev/null)
+            
+            if [[ -n "$task_states" ]]; then
+                total_tasks=$(echo "$task_states" | wc -l)
+                success_tasks=$(echo "$task_states" | grep -c "success" || echo "0")
+                running_tasks=$(echo "$task_states" | grep -c "running" || echo "0")
+                
+                if [[ $running_tasks -gt 0 ]]; then
+                    ((final_running++))
+                elif [[ $success_tasks -eq $total_tasks && $total_tasks -gt 0 ]]; then
+                    ((final_successful++))
+                fi
+            fi
+        fi
+    done
+    
+    if [[ $final_running -eq 0 ]]; then
+        echo "  ✅ All previously running DAGs have now completed!"
+        running=0
+        successful=$((successful + final_running))
+    else
+        echo "  🔄 $final_running DAGs still running (may need more time)"
+        running=$final_running
+    fi
 fi
 
 echo ""

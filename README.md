@@ -39,7 +39,7 @@ curl http://localhost:8080
 ./webserver_status_check.sh
 
 📊 **Full DAG execution + webserver-accurate status check:**
-./check_all_dags.sh
+./webserver_status_check_with_activation.sh
 
 Both scripts now use enhanced detection that:
 ✅ Detects import errors immediately
