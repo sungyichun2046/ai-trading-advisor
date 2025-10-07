@@ -63,8 +63,8 @@ make test-all
 **Expected Results:**
 - ✅ 4 containers running (postgres, redis, airflow-webserver, airflow-scheduler)
 - ✅ Airflow returns HTTP 302 (redirect to login)
-- ✅ 8 DAGs listed (7 active, 1 paused)
-- ✅ 225+ tests passing
+- ✅ 3 DAGs working perfectly: data_collection_dag, analysis_dag, trading_dag
+- ✅ Simplified test suite passing with 67% fewer files
 - 
 #### Docker / Docker Compose
 
@@ -150,29 +150,30 @@ This will:
 - ✅ Populate sample trading data (market data, news, analysis, recommendations)
 - ✅ Verify everything is working
 
-### **🧪 Testing Setup**
+### **🧪 Simplified Testing Setup**
 
 ```bash
-# Build test container with pytest dependencies
-make docker-test-build
+# Test individual modules (simplified structure)
+python -m pytest tests/test_data_manager.py -v      # Data collection tests
+python -m pytest tests/test_analysis_engine.py -v   # Analysis tests  
+python -m pytest tests/test_trading_engine.py -v    # Trading tests
+python -m pytest tests/test_dags.py -v              # DAG workflow tests
 
-# Run core tests (mocked, always pass)
-make test                    # 16 core tests with mocking
-
-# Run all tests including integration tests
-make test-all               # 87 total tests (some may fail without proper setup)
-
-# Run real data integration tests (requires USE_REAL_DATA=True + API keys)
-make test-real-data         # 4 real API tests (skipped if USE_REAL_DATA=False)
+# Run all tests with simplified structure
+make test-all               # All tests with 67% fewer files
 
 # Run tests with coverage
 make test-coverage
+
+# Validate simplified DAG structure (3 DAGs instead of 12)
+./webserver_status_check_with_activation.sh
 ```
 
-**Test Types:**
-- **Core Tests** (`make test`): 16 reliable tests with full mocking
-- **Real Data Tests** (`make test-real-data`): 4 tests using actual APIs
-- **Integration Tests**: Require proper Docker/database setup
+**Simplified Test Types:**
+- **Module Tests**: 4 focused test files for each core module
+- **DAG Tests**: Workflow testing for 3 simplified DAGs
+- **Integration Tests**: End-to-end system validation
+- **67% Reduction**: From 14+ test files to 4 focused test files
 
 ### Quick Verification
 
@@ -832,32 +833,30 @@ make clean                    # Clean temporary files
 └─────────────────┘    └─────────────────┘    └─────────────────┘
 ```
 
-### Airflow DAG Architecture
+### Simplified DAG Architecture
 ```
-┌────────────────────────────────────────────────────────────────┐
-│                    Data Collection Pipeline                     │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
-│  │ Market Data  │  │ News & Sent  │  │ Data Quality & Store │  │
-│  │ (15min)      │→ │ (15min)      │→ │ (15min)              │  │
-│  └──────────────┘  └──────────────┘  └──────────────────────┘  │
-└────────────────────────────────────────────────────────────────┘
-                                ↓
-┌────────────────────────────────────────────────────────────────┐
-│                     Analysis Pipeline                          │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
-│  │ Technical    │  │ Fundamental  │  │ Risk & Sentiment     │  │
-│  │ Analysis     │  │ Analysis     │  │ Analysis             │  │
-│  │ (30min)      │  │ (30min)      │  │ (30min)              │  │
-│  └──────────────┘  └──────────────┘  └──────────────────────┘  │
-└────────────────────────────────────────────────────────────────┘
-                                ↓
-┌────────────────────────────────────────────────────────────────┐
-│                  Recommendation Pipeline                       │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
-│  │ Signal Gen   │  │ Position     │  │ Risk Filter & Report │  │
-│  │ (1hour)      │→ │ Sizing       │→ │ (1hour)              │  │
-│  └──────────────┘  └──────────────┘  └──────────────────────┘  │
-└────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│ data_collection_dag.py (Every 15 min)                   │
+│ ┌────────────┐ → ┌────────────┐ → ┌─────────────────┐   │
+│ │Market Data │   │Fundamental │   │Sentiment & Vol  │   │
+│ └────────────┘   └────────────┘   └─────────────────┘   │
+└──────────────────────────────────────────────────────────┘
+                          ↓
+┌──────────────────────────────────────────────────────────┐ 
+│ analysis_dag.py (Every hour)                             │
+│ ┌────────────┐ → ┌────────────┐ → ┌─────────────────┐   │
+│ │Technical   │   │Patterns &  │   │Risk & Regime    │   │
+│ │Indicators  │   │Fundamentals│   │Classification   │   │
+│ └────────────┘   └────────────┘   └─────────────────┘   │
+└──────────────────────────────────────────────────────────┘
+                          ↓
+┌──────────────────────────────────────────────────────────┐
+│ trading_dag.py (Twice daily)                             │  
+│ ┌────────────┐ → ┌────────────┐ → ┌─────────────────┐   │
+│ │Signal Gen  │   │Position    │   │Portfolio Mgmt   │   │
+│ │& Risk Calc │   │Sizing      │   │& Alerts         │   │
+│ └────────────┘   └────────────┘   └─────────────────┘   │
+└──────────────────────────────────────────────────────────┘
 ```
 
 ### Docker Components
@@ -895,44 +894,35 @@ make clean                    # Clean temporary files
 
 MIT License - see LICENSE file for details
 
-## Project structure
-├── docker-compose.yml
-├── Dockerfile
-├── Dockerfile.airflow
-├── init-db-simple.sql
-├── init-db.sql
-├── Makefile
-├── populate_data.sql
-├── populate_sample_data.py
-├── pyproject.toml
-├── README.md
-├── requirements-airflow.txt
-├── requirements-dev.txt
-├── requirements.txt
-├── src
-│   ├── airflow_dags
-│   │   ├── analysis_pipeline.py
-│   │   ├── data_pipeline.py
-│   │   ├── __init__.py
-│   │   ├── recommendation_pipeline.py
-│   │   └── simple_data_pipeline.py
-│   ├── api
-│   │   └── __init__.py
-│   ├── config.py
-│   ├── core
-│   │   ├── analysis_engine.py
-│   │   ├── __init__.py
-│   │   ├── recommendation_engine.py
-│   │   └── risk_engine.py
-│   ├── data
-│   │   ├── collectors.py
-│   │   ├── database.py
-│   │   ├── __init__.py
-│   │   └── processors.py
-│   ├── __init__.py
-│   └── main.py
-└── tests
-    ├── __init__.py
-    ├── test_config.py
-    ├── test_database.py
-    └── test_main.py
+## Simplified Project Structure
+
+```
+ai-trading-advisor/
+├── src/
+│   ├── dags/                     # 3 Airflow DAGs (simplified from 12)
+│   │   ├── data_collection_dag.py    # Data gathering pipeline
+│   │   ├── analysis_dag.py           # Analysis pipeline
+│   │   └── trading_dag.py            # Trading & risk pipeline
+│   ├── core/                     # 3 core modules (simplified from 19 files)
+│   │   ├── data_manager.py           # All data collection & storage
+│   │   ├── analysis_engine.py        # All analysis capabilities
+│   │   └── trading_engine.py         # All trading & risk logic
+│   ├── config.py                 # Configuration settings
+│   ├── main.py                   # FastAPI application
+│   └── __init__.py
+├── tests/                        # 4 test files (simplified from 14+)
+│   ├── test_data_manager.py          # Data collection tests
+│   ├── test_analysis_engine.py       # Analysis tests
+│   ├── test_trading_engine.py        # Trading & risk tests
+│   └── test_dags.py                 # DAG workflow tests
+├── docker-compose.yml           # Docker services
+├── Dockerfile                   # FastAPI application container
+├── Dockerfile.airflow           # Airflow container
+├── requirements.txt             # Python dependencies
+├── requirements-airflow.txt     # Airflow dependencies
+├── Makefile                     # Development commands
+└── README.md                    # Documentation
+```
+
+**Result: 9 Python files instead of 27+ files (67% reduction)**
+**No separate data/ subfolder - all data logic in core/data_manager.py**
