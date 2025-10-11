@@ -11,6 +11,13 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["src*"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
 [tool.black]
 line-length = 88
 target-version = ['py311']
@@ -54,7 +61,10 @@ strict_equality = true
 minversion = "7.0"
 addopts = "-ra -q --strict-markers --strict-config"
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = [".", "src"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests",
