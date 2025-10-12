@@ -15,6 +15,7 @@ from typing import Dict, Any, List
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
+from airflow.utils.dates import days_ago
 
 # Import core modules with fallbacks
 import sys
@@ -31,39 +32,23 @@ except ImportError:
     def get_data_manager():
         class MockDataManager:
             def collect_market_data(self, symbols):
-                return {
-                    'status': 'success',
-                    'symbols_collected': len(symbols),
-                    'data': {symbol: {'price': 100.0 + hash(symbol) % 50, 'volume': 1000000} for symbol in symbols}
-                }
+                return {'status': 'success', 'symbols_collected': len(symbols), 'data': {s: {'price': 100, 'volume': 1000000} for s in symbols[:3]}}  # Fast mock
             
             def collect_fundamental_data(self, symbols):
-                return {
-                    'status': 'success',
-                    'symbols_collected': len(symbols),
-                    'data': [{'symbol': symbol, 'pe_ratio': 20.0 + hash(symbol) % 10, 'pb_ratio': 3.0 + hash(symbol) % 2, 'market_cap': 1000000000} for symbol in symbols]
-                }
+                return {'status': 'success', 'symbols_collected': len(symbols), 'data': [{'symbol': s, 'pe_ratio': 20, 'pb_ratio': 3} for s in symbols[:3]]}  # Fast mock
             
-            def collect_sentiment_data(self, max_articles=20):
-                return {
-                    'status': 'success',
-                    'article_count': max_articles,
-                    'articles': [{'title': f'Market News {i}', 'sentiment_score': (i % 3 - 1) * 0.3, 'sentiment_label': ['negative', 'neutral', 'positive'][i % 3]} for i in range(max_articles)]
-                }
+            def collect_sentiment_data(self, max_articles=5):  # Reduced articles
+                return {'status': 'success', 'article_count': 5, 'articles': [{'sentiment_score': 0.5, 'sentiment_label': 'positive'}] * 5}  # Fast mock
         return MockDataManager()
     
     class MarketDataCollector:
-        def collect_volatility_data(self, symbols, period_days=30):
-            return {
-                'status': 'success',
-                'symbols_processed': len(symbols),
-                'volatility_data': {symbol: {'realized_volatility': 0.15 + (hash(symbol) % 10) * 0.01, 'implied_volatility': 0.20 + (hash(symbol) % 8) * 0.015} for symbol in symbols}
-            }
+        def collect_volatility_data(self, symbols, period_days=5):  # Reduced period
+            return {'status': 'success', 'symbols_processed': len(symbols), 'volatility_data': {s: {'realized_volatility': 0.2, 'implied_volatility': 0.25} for s in symbols[:3]}}  # Fast mock
 
 logger = logging.getLogger(__name__)
 
-# Core symbols for data collection
-SYMBOLS = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'TSLA', 'META', 'NVDA', 'NFLX', 'AMD', 'CRM', 'SPY', 'QQQ', 'IWM', 'VTI', 'EFA']
+# Core symbols - reduced for fast execution
+SYMBOLS = ['AAPL', 'SPY', 'QQQ']  # Only 3 symbols for speed
 
 # DAG configuration
 dag = DAG(
@@ -71,11 +56,12 @@ dag = DAG(
     default_args={
         'owner': 'ai-trading-advisor',
         'depends_on_past': False,
-        'start_date': datetime(2024, 1, 1),
+        'start_date': days_ago(1),
         'email_on_failure': False,
         'email_on_retry': False,
-        'retries': 2,
-        'retry_delay': timedelta(minutes=3),
+        'retries': 1,
+        'retry_delay': timedelta(minutes=2),
+        'execution_timeout': timedelta(minutes=3),
         'catchup': False
     },
     description='Streamlined data collection pipeline',
