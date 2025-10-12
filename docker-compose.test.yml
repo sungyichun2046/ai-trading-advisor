@@ -1,0 +1,131 @@
+version: '3.8'
+
+# Test environment for new DAG structure
+# Runs on different ports to avoid conflicts with main Airflow
+
+x-airflow-common:
+  &airflow-common
+  image: apache/airflow:2.7.3-python3.11
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@test-postgres/airflow
+    AIRFLOW__CORE__FERNET_KEY: test_key_for_dag_validation_only
+    AIRFLOW__CORE__DAGS_FOLDER: /opt/airflow/test_dags
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'false'
+    AIRFLOW__WEBSERVER__SECRET_KEY: test_secret_key
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
+    AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL: 30
+    AIRFLOW__SCHEDULER__CATCHUP_BY_DEFAULT: 'false'
+    AIRFLOW__WEBSERVER__WEB_SERVER_PORT: 8080
+    # Test environment variables
+    POSTGRES_HOST: test-postgres
+    POSTGRES_DB: airflow
+    POSTGRES_USER: airflow
+    POSTGRES_PASSWORD: airflow
+  volumes:
+    - ./src/dags:/opt/airflow/test_dags:ro
+    - ./src:/opt/airflow/src:ro
+    - ./tests:/opt/airflow/tests:ro
+    - test_airflow_logs:/opt/airflow/logs
+    - test_airflow_plugins:/opt/airflow/plugins
+  user: "${AIRFLOW_UID:-50000}:0"
+  depends_on: &airflow-common-depends-on
+    test-postgres:
+      condition: service_healthy
+
+services:
+  test-postgres:
+    image: postgres:13
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - test_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    restart: always
+
+  test-airflow-init:
+    <<: *airflow-common
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        echo "🚀 Initializing Test Airflow Environment for New DAGs"
+        airflow db init
+        airflow users create \
+          --username admin \
+          --firstname Admin \
+          --lastname Test \
+          --role Admin \
+          --email admin@test.com \
+          --password admin
+        echo "✅ Test Airflow initialized successfully"
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@test-postgres/airflow
+      _AIRFLOW_DB_UPGRADE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: admin
+      _AIRFLOW_WWW_USER_PASSWORD: admin
+    depends_on:
+      test-postgres:
+        condition: service_healthy
+
+  test-airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "8081:8080"  # Different port to avoid conflict
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@test-postgres/airflow
+    depends_on:
+      test-airflow-init:
+        condition: service_completed_successfully
+
+  test-airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "airflow", "jobs", "check", "--job-type", "SchedulerJob", "--hostname", "$${HOSTNAME}"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: always
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@test-postgres/airflow
+    depends_on:
+      test-airflow-init:
+        condition: service_completed_successfully
+
+  # Optional: Standalone test runner
+  test-dag-runner:
+    <<: *airflow-common
+    command: /bin/bash -c "sleep infinity"
+    profiles: ["test"]
+    environment:
+      <<: *airflow-common-env
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@test-postgres/airflow
+    depends_on:
+      test-airflow-init:
+        condition: service_completed_successfully
+
+volumes:
+  test_airflow_logs:
+  test_airflow_plugins:
+  test_postgres_data:
