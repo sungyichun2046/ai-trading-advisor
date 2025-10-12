@@ -51,27 +51,25 @@ test:
 	$(VENV)/bin/pytest tests/test_core_functionality.py::TestConfigurationSettings tests/test_core_functionality.py::TestDatabaseSchema tests/test_core_functionality.py::TestDataValidationLogic tests/test_core_functionality.py::TestDataFormats tests/test_core_functionality.py::TestEnvironmentConfiguration tests/test_core_functionality.py::TestIntegrationReadiness tests/test_data_collectors.py::TestMarketDataCollector::test_init tests/test_data_collectors.py::TestMarketDataCollector::test_collect_real_time_data_dummy_mode tests/test_data_collectors.py::TestNewsCollector::test_collect_financial_news_dummy_mode tests/test_strategic_collectors.py::TestFundamentalDataCollector::test_init tests/test_strategic_collectors.py::TestFundamentalDataCollector::test_collect_weekly_fundamentals_dummy_mode tests/test_strategic_collectors.py::TestVolatilityMonitor::test_init tests/test_strategic_collectors.py::TestVolatilityMonitor::test_check_market_volatility_dummy_mode -v
 
 test-all:
-	@echo "Running all tests with proper environment setup..."
-	@echo "Excluding integration tests that require external services or incorrect DAG file references..."
+	@echo "Running all tests for simplified architecture (4 test files)..."
+	@echo "Testing: data_manager, analysis_engine, trading_engine, and all DAGs..."
 	@POSTGRES_HOST=localhost POSTGRES_DB=airflow POSTGRES_USER=airflow POSTGRES_PASSWORD=airflow \
-	$(VENV)/bin/pytest tests/ --ignore=tests/test_api_endpoints.py --ignore=tests/test_api_integration.py \
-	--ignore=tests/test_data_pipeline.py --ignore=tests/test_database.py \
-	-k "not test_correlation_analysis and not test_collect_weekly_fundamentals_real_mode and not test_check_market_volatility_real_mode and not test_get_latest_financial_item and not test_check_market_hours and not test_check_market_holidays and not test_database_connection_failure and not test_collect_market_data_structure and not test_collect_news_sentiment_structure and not test_dag_structure_exists and not test_check_market_volatility_extreme_conditions and not test_check_index_volatility" \
+	$(VENV)/bin/pytest tests/test_data_manager.py tests/test_analysis_engine.py tests/test_trading_engine.py tests/test_data_collection_dag.py tests/test_analysis_dag.py tests/test_trading_dag.py \
 	-v --tb=short
 
-test-real-data:
-	$(VENV)/bin/pytest tests/test_real_data_integration.py -v -s
+test-dags:
+	@echo "Running DAG-specific tests..."
+	@POSTGRES_HOST=localhost POSTGRES_DB=airflow POSTGRES_USER=airflow POSTGRES_PASSWORD=airflow \
+	$(VENV)/bin/pytest tests/test_data_collection_dag.py tests/test_analysis_dag.py tests/test_trading_dag.py -v
 
 test-core:
-	@echo "Running core functionality tests (160+ tests)..."
+	@echo "Running core functionality tests for simplified architecture..."
 	@POSTGRES_HOST=localhost POSTGRES_DB=airflow POSTGRES_USER=airflow POSTGRES_PASSWORD=airflow \
-	$(VENV)/bin/pytest tests/test_config.py tests/test_core_functionality.py tests/test_main.py \
-	tests/test_data_collectors.py tests/test_market_risk_adapter.py tests/test_user_profiling.py \
-	tests/test_user_profiling_production.py tests/test_real_data_integration.py \
-	tests/test_position_sizing.py -k "not test_correlation_analysis and not test_collect_market_data_structure and not test_collect_news_sentiment_structure and not test_dag_structure_exists" --tb=short -q
+	$(VENV)/bin/pytest tests/test_data_manager.py tests/test_analysis_engine.py tests/test_trading_engine.py \
+	--tb=short -q
 
 test-coverage:
-	$(VENV)/bin/pytest tests/test_core_functionality.py tests/test_data_collectors.py --cov=src --cov-report=html --cov-report=term
+	$(VENV)/bin/pytest tests/ --cov=src --cov-report=html --cov-report=term
 
 test-watch:
 	$(VENV)/bin/pytest tests/ -v --tb=short -f
