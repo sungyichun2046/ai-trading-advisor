@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from src.dags.data_collection_dag import (
     collect_market_data, collect_fundamental_data, collect_sentiment_data,
-    collect_volatility_data, validate_data_quality, dag
+    collect_volatility_data, validate_data_quality_pipeline, dag
 )
 
 
@@ -190,7 +190,7 @@ class TestValidateDataQuality:
     
     def test_validate_data_quality_success(self):
         """Test successful data quality validation."""
-        result = validate_data_quality(**self.mock_context)
+        result = validate_data_quality_pipeline(**self.mock_context)
         
         assert 'timestamp' in result
         assert 'data_sources' in result

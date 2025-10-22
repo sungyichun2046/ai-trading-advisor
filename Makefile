@@ -51,10 +51,10 @@ test:
 	$(VENV)/bin/pytest tests/test_core_functionality.py::TestConfigurationSettings tests/test_core_functionality.py::TestDatabaseSchema tests/test_core_functionality.py::TestDataValidationLogic tests/test_core_functionality.py::TestDataFormats tests/test_core_functionality.py::TestEnvironmentConfiguration tests/test_core_functionality.py::TestIntegrationReadiness tests/test_data_collectors.py::TestMarketDataCollector::test_init tests/test_data_collectors.py::TestMarketDataCollector::test_collect_real_time_data_dummy_mode tests/test_data_collectors.py::TestNewsCollector::test_collect_financial_news_dummy_mode tests/test_strategic_collectors.py::TestFundamentalDataCollector::test_init tests/test_strategic_collectors.py::TestFundamentalDataCollector::test_collect_weekly_fundamentals_dummy_mode tests/test_strategic_collectors.py::TestVolatilityMonitor::test_init tests/test_strategic_collectors.py::TestVolatilityMonitor::test_check_market_volatility_dummy_mode -v
 
 test-all:
-	@echo "Running all tests for simplified architecture (4 test files)..."
-	@echo "Testing: data_manager, analysis_engine, trading_engine, and all DAGs..."
+	@echo "Running all tests in tests/ folder (7 test files)..."
+	@echo "Testing: shared utils, core engines, and all DAGs..."
 	@POSTGRES_HOST=localhost POSTGRES_DB=airflow POSTGRES_USER=airflow POSTGRES_PASSWORD=airflow \
-	$(VENV)/bin/pytest tests/test_data_manager.py tests/test_analysis_engine.py tests/test_trading_engine.py tests/test_data_collection_dag.py tests/test_analysis_dag.py tests/test_trading_dag.py \
+	$(VENV)/bin/pytest tests/ \
 	-v --tb=short
 
 test-dags:
