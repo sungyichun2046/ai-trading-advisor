@@ -304,33 +304,120 @@ echo ""
 echo "📊 FINAL SUCCESS SUMMARY"
 echo "========================"
 
-# Get final counts - just check that we have at least 1 successful run (which proves DAGs work)
-data_success_final=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver airflow dags list-runs -d data_collection 2>/dev/null | grep -c "success" | tr -d '\r' || echo "0")
-analysis_success_final=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver airflow dags list-runs -d analysis 2>/dev/null | grep -c "success" | tr -d '\r' || echo "0")
-trading_success_final=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver airflow dags list-runs -d trading 2>/dev/null | grep -c "success" | tr -d '\r' || echo "0")
+# Get final counts - distinguish between 'running' and 'success' runs for each DAG
 
-# Show simplified counts (1+ means working)
-if [ "$data_success_final" -gt 0 ]; then
-    data_display="1+ (working ✅)"
+# Count successful runs
+data_success=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+    airflow dags list-runs -d data_collection 2>/dev/null \
+    | grep -c "success" | tr -d '\r' || echo "0")
+analysis_success=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+    airflow dags list-runs -d analysis 2>/dev/null \
+    | grep -c "success" | tr -d '\r' || echo "0")
+trading_success=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+    airflow dags list-runs -d trading 2>/dev/null \
+    | grep -c "success" | tr -d '\r' || echo "0")
+
+# Count running runs
+data_running=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+    airflow dags list-runs -d data_collection 2>/dev/null \
+    | grep -c "running" | tr -d '\r' || echo "0")
+analysis_running=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+    airflow dags list-runs -d analysis 2>/dev/null \
+    | grep -c "running" | tr -d '\r' || echo "0")
+trading_running=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+    airflow dags list-runs -d trading 2>/dev/null \
+    | grep -c "running" | tr -d '\r' || echo "0")
+
+# Count queued runs
+data_queued=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+    airflow dags list-runs -d data_collection 2>/dev/null \
+    | grep -c "queued" | tr -d '\r' || echo "0")
+analysis_queued=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+    airflow dags list-runs -d analysis 2>/dev/null \
+    | grep -c "queued" | tr -d '\r' || echo "0")
+trading_queued=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+    airflow dags list-runs -d trading 2>/dev/null \
+    | grep -c "queued" | tr -d '\r' || echo "0")
+
+# Count failed runs
+data_failed=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+    airflow dags list-runs -d data_collection 2>/dev/null \
+    | grep -c "failed" | tr -d '\r' || echo "0")
+analysis_failed=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+    airflow dags list-runs -d analysis 2>/dev/null \
+    | grep -c "failed" | tr -d '\r' || echo "0")
+trading_failed=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+    airflow dags list-runs -d trading 2>/dev/null \
+    | grep -c "failed" | tr -d '\r' || echo "0")
+
+# Display detailed status for each DAG
+echo "📊 DETAILED DAG STATUS:"
+echo "======================"
+echo ""
+
+echo "📈 Data Collection DAG:"
+echo "   ✅ Success: $data_success runs"
+echo "   🔄 Running: $data_running runs"
+echo "   ⏳ Queued:  $data_queued runs"
+echo "   ❌ Failed:  $data_failed runs"
+
+echo ""
+echo "🧠 Analysis DAG:"
+echo "   ✅ Success: $analysis_success runs"
+echo "   🔄 Running: $analysis_running runs"
+echo "   ⏳ Queued:  $analysis_queued runs"
+echo "   ❌ Failed:  $analysis_failed runs"
+
+echo ""
+echo "💼 Trading DAG:"
+echo "   ✅ Success: $trading_success runs"
+echo "   🔄 Running: $trading_running runs"
+echo "   ⏳ Queued:  $trading_queued runs"
+echo "   ❌ Failed:  $trading_failed runs"
+
+echo ""
+echo "📋 SUMMARY STATUS:"
+echo "=================="
+
+# Create status display for each DAG
+if [ "$data_success" -gt 0 ]; then
+    data_display="✅ Working ($data_success successful)"
+elif [ "$data_running" -gt 0 ]; then
+    data_display="🔄 Running ($data_running active)"
+elif [ "$data_queued" -gt 0 ]; then
+    data_display="⏳ Queued ($data_queued pending)"
 else
-    data_display="0 (failed ❌)"
+    data_display="❌ Not working ($data_failed failed)"
 fi
 
-if [ "$analysis_success_final" -gt 0 ]; then
-    analysis_display="1+ (working ✅)"
+if [ "$analysis_success" -gt 0 ]; then
+    analysis_display="✅ Working ($analysis_success successful)"
+elif [ "$analysis_running" -gt 0 ]; then
+    analysis_display="🔄 Running ($analysis_running active)"
+elif [ "$analysis_queued" -gt 0 ]; then
+    analysis_display="⏳ Queued ($analysis_queued pending)"
 else
-    analysis_display="0 (failed ❌)"
+    analysis_display="❌ Not working ($analysis_failed failed)"
 fi
 
-if [ "$trading_success_final" -gt 0 ]; then
-    trading_display="1+ (working ✅)"
+if [ "$trading_success" -gt 0 ]; then
+    trading_display="✅ Working ($trading_success successful)"
+elif [ "$trading_running" -gt 0 ]; then
+    trading_display="🔄 Running ($trading_running active)"
+elif [ "$trading_queued" -gt 0 ]; then
+    trading_display="⏳ Queued ($trading_queued pending)"
 else
-    trading_display="0 (failed ❌)"
+    trading_display="❌ Not working ($trading_failed failed)"
 fi
 
 echo "Data Collection: $data_display"
-echo "Analysis: $analysis_display"
-echo "Trading: $trading_display"
+echo "Analysis:        $analysis_display"
+echo "Trading:         $trading_display"
+
+# Set final counts for later logic (maintain compatibility)
+data_success_final=$data_success
+analysis_success_final=$analysis_success
+trading_success_final=$trading_success
 
 # Determine overall result
 if [ "$data_success_final" -gt 0 ] && [ "$analysis_success_final" -gt 0 ] && [ "$trading_success_final" -gt 0 ]; then
@@ -353,12 +440,12 @@ echo "==============================================="
 echo "🎯 FINAL DAG VALIDATION REPORT"
 echo "==============================================="
 echo ""
-echo "✅ Data Collection DAG:     $data_display"
-echo "✅ Analysis DAG:            $analysis_display"  
-echo "✅ Trading DAG:             $trading_display"
+echo "📈 Data Collection DAG:     $data_display"
+echo "🧠 Analysis DAG:            $analysis_display"  
+echo "💼 Trading DAG:             $trading_display"
 echo ""
 if [ "$final_result" == "SUCCESS" ]; then
-    echo "🎉 OVERALL RESULT: ✅ SUCCESS - All 3 DAGs working!"
+    echo "🎉 OVERALL RESULT: ✅ SUCCESS - All 3 DAGs work!"
     echo "🏆 Streamlined structure (3/3 DAGs) complete and functional"
 else
     echo "❌ OVERALL RESULT: ❌ FAILURE - Some DAGs not working"
