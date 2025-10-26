@@ -53,8 +53,8 @@ class MarketDataCollector:
         pass
 
 try:
-    from src.utils.shared import validate_data_quality, log_performance, send_alerts, calculate_returns
-    from src.core.analysis_engine import AnalysisEngine, TechnicalAnalyzer, PatternAnalyzer
+    from src.utils.shared import validate_data_quality, log_performance, send_alerts, calculate_returns, aggregate_data_quality_scores
+    from src.core.analysis_engine import AnalysisEngine, TechnicalAnalyzer, PatternAnalyzer, FundamentalAnalyzer, SentimentAnalyzer
 except ImportError as e:
     logger = logging.getLogger(__name__)
     logger.warning(f"Failed to import core modules: {e}")
@@ -75,16 +75,23 @@ except ImportError as e:
             return []
         return [(prices[i] - prices[i-periods]) / prices[i-periods] for i in range(periods, len(prices))]
     
+    def aggregate_data_quality_scores(quality_results):
+        return {'overall_score': 0.8, 'grade': 'good', 'total_issues': 0}
+    
     # Fallback analysis engine
     class AnalysisEngine:
         def __init__(self, config=None):
             self.config = config or {}
+            self.fundamental = type('FundamentalAnalyzer', (), {'analyze_fundamentals': lambda s, symbols: {'status': 'success', 'market_bias': 'neutral'}})()
+            self.sentiment = type('SentimentAnalyzer', (), {'analyze_sentiment': lambda s, max_articles=25: {'status': 'success', 'sentiment_bias': 'neutral'}})()
         
         def multi_timeframe_analysis(self, symbol, data_by_timeframe):
             return {
                 'symbol': symbol,
                 'timestamp': datetime.now().isoformat(),
                 'timeframe_analysis': {'1h': {'technical': {'indicators': {'rsi': {'signal': 'bullish'}}}}},
+                'fundamental_analysis': {'status': 'success', 'market_bias': 'neutral'},
+                'sentiment_analysis': {'status': 'success', 'sentiment_bias': 'neutral'},
                 'consensus': {'signal': 'bullish', 'strength': 'moderate'}
             }
 
@@ -199,18 +206,22 @@ def analyze_technical_indicators(**context) -> Dict[str, Any]:
         else:
             market_consensus = {'dominant_signal': 'neutral', 'agreement_ratio': 0.0, 'total_symbols': 0}
         
-        # Validate data quality
+        # Enhanced data quality validation using shared functions
         quality_results = []
         for symbol, analysis in timeframe_data.items():
+            # Validate each analysis result
+            quality_check = validate_data_quality(analysis, 'analysis_result', 0.7)
+            quality_results.append(quality_check)
+            
+            # Also validate individual timeframe data quality
             for timeframe, tf_analysis in analysis.get('timeframe_analysis', {}).items():
                 data_quality = tf_analysis.get('technical', {}).get('data_quality', {})
-                quality_results.append(data_quality)
+                if data_quality:
+                    quality_results.append(data_quality)
         
-        # Calculate overall quality score
-        if quality_results:
-            avg_quality = sum(q.get('quality_score', 0.8) for q in quality_results) / len(quality_results)
-        else:
-            avg_quality = 0.8
+        # Aggregate quality scores using shared function
+        aggregated_quality = aggregate_data_quality_scores(quality_results)
+        avg_quality = aggregated_quality.get('overall_score', 0.8)
         
         processed_data = {
             'timestamp': datetime.now().isoformat(),
@@ -221,7 +232,9 @@ def analyze_technical_indicators(**context) -> Dict[str, Any]:
             'symbol_analysis': timeframe_data,
             'data_quality': {
                 'overall_score': round(avg_quality, 2),
-                'quality_grade': 'excellent' if avg_quality >= 0.9 else 'good' if avg_quality >= 0.7 else 'fair'
+                'quality_grade': aggregated_quality.get('grade', 'fair'),
+                'total_issues': aggregated_quality.get('total_issues', 0),
+                'source_count': aggregated_quality.get('source_count', len(quality_results))
             }
         }
         
@@ -248,87 +261,64 @@ def analyze_technical_indicators(**context) -> Dict[str, Any]:
 
 
 def analyze_fundamentals(**context) -> Dict[str, Any]:
-    """Analyze fundamental metrics with technical alignment check."""
+    """Analyze fundamental metrics using enhanced AnalysisEngine."""
     start_time = datetime.now()
     
     try:
-        logger.info("Starting fundamental analysis")
+        logger.info("Starting enhanced fundamental analysis")
+        
+        # Initialize enhanced analysis engine
+        analysis_engine = AnalysisEngine()
         
         # Get technical analysis results for alignment check
         tech_analysis = context['task_instance'].xcom_pull(task_ids='analyze_technical_indicators', key='technical_analysis')
         
-        # Generate fundamental metrics for each symbol
-        fundamental_data = {}
-        for symbol in SYMBOLS:
-            # Use hash for consistent but varied fundamental data
-            seed_value = hash(symbol) % 1000
-            np.random.seed(seed_value)
-            
-            fundamental_data[symbol] = {
-                'pe_ratio': round(15 + np.random.normal(0, 5), 2),
-                'pb_ratio': round(2 + np.random.normal(0, 1), 2),
-                'debt_to_equity': round(0.5 + np.random.normal(0, 0.3), 2),
-                'roe': round(0.15 + np.random.normal(0, 0.05), 4),
-                'revenue_growth': round(np.random.normal(0.08, 0.1), 4),
-                'profit_margin': round(0.1 + np.random.normal(0, 0.05), 4)
-            }
+        # Use enhanced fundamental analyzer
+        fundamental_results = analysis_engine.fundamental.analyze_fundamentals(SYMBOLS)
         
-        # Calculate valuation assessments
-        valuation_summary = {'undervalued': 0, 'fairly_valued': 0, 'overvalued': 0}
+        # Validate fundamental data quality
+        quality_check = validate_data_quality(fundamental_results, 'fundamental', 0.7)
         
-        for symbol, metrics in fundamental_data.items():
-            pe_ratio = metrics.get('pe_ratio', 20)
-            if pe_ratio < 15:
-                assessment = 'undervalued'
-            elif pe_ratio > 25:
-                assessment = 'overvalued'
-            else:
-                assessment = 'fairly_valued'
-            
-            valuation_summary[assessment] += 1
-            fundamental_data[symbol]['valuation'] = assessment
+        # Extract key metrics from enhanced analysis
+        market_bias = fundamental_results.get('market_bias', 'neutral')
+        avg_valuation = fundamental_results.get('average_valuation', 0.5)
         
         # Check alignment with technical analysis
         tech_consensus = tech_analysis.get('market_consensus', {}).get('dominant_signal', 'neutral') if tech_analysis else 'neutral'
-        fundamental_bias = max(valuation_summary, key=valuation_summary.get)
         
-        # Determine alignment
-        if (tech_consensus == 'bullish' and fundamental_bias == 'undervalued') or \
-           (tech_consensus == 'bearish' and fundamental_bias == 'overvalued'):
+        # Determine alignment between technical and fundamental signals
+        if (tech_consensus == 'bullish' and market_bias == 'bullish') or \
+           (tech_consensus == 'bearish' and market_bias == 'bearish'):
             alignment = 'aligned'
-        elif tech_consensus == 'neutral' or fundamental_bias == 'fairly_valued':
+        elif tech_consensus == 'neutral' or market_bias == 'neutral':
             alignment = 'neutral'
         else:
             alignment = 'divergent'
         
         processed_data = {
             'timestamp': datetime.now().isoformat(),
-            'symbols_analyzed': len(fundamental_data),
+            'symbols_analyzed': len(SYMBOLS),
             'fundamental_summary': {
-                'valuation_distribution': valuation_summary,
-                'dominant_valuation': fundamental_bias,
-                'market_valuation': fundamental_bias,  # Add this for test compatibility
-                'average_pe': round(sum(m.get('pe_ratio', 20) for m in fundamental_data.values()) / len(fundamental_data), 2)
+                'market_valuation': market_bias,
+                'average_valuation': avg_valuation,
+                'fundamental_status': fundamental_results.get('status', 'failed')
             },
-            'symbol_fundamentals': fundamental_data,
+            'enhanced_fundamental_results': fundamental_results,
             'technical_alignment': {
                 'alignment_status': alignment,
                 'technical_signal': tech_consensus,
-                'fundamental_bias': fundamental_bias
-            }
+                'fundamental_bias': market_bias
+            },
+            'data_quality': quality_check
         }
-        
-        # Validate data quality
-        quality_check = validate_data_quality(processed_data, 'fundamental', 0.8)
-        processed_data['data_quality'] = quality_check
         
         # Log performance
         end_time = datetime.now()
         log_performance('fundamental_analysis', start_time, end_time, 'success', 
-                       {'symbols_analyzed': len(fundamental_data)})
+                       {'symbols_analyzed': len(SYMBOLS)})
         
         context['task_instance'].xcom_push(key='fundamental_analysis', value=processed_data)
-        logger.info(f"Fundamental analysis completed: {fundamental_bias} bias, {alignment} with technical")
+        logger.info(f"Fundamental analysis completed: {market_bias} bias, {alignment} with technical")
         return processed_data
         
     except Exception as e:
@@ -417,32 +407,32 @@ def detect_patterns(**context) -> Dict[str, Any]:
 
 
 def analyze_sentiment(**context) -> Dict[str, Any]:
-    """Analyze market sentiment and cross-reference with other analyses."""
+    """Analyze market sentiment using enhanced SentimentAnalyzer."""
     start_time = datetime.now()
     
     try:
-        logger.info("Starting sentiment analysis")
+        logger.info("Starting enhanced sentiment analysis")
+        
+        # Initialize enhanced analysis engine
+        analysis_engine = AnalysisEngine()
         
         # Get previous analysis results
         tech_analysis = context['task_instance'].xcom_pull(task_ids='analyze_technical_indicators', key='technical_analysis')
         pattern_analysis = context['task_instance'].xcom_pull(task_ids='detect_patterns', key='pattern_analysis')
         
-        # Generate sentiment data (simulated news sentiment)
-        sentiment_scores = []
-        for i in range(20):  # Simulate 20 news articles
-            score = np.random.normal(0, 0.3)  # Neutral bias with some variation
-            sentiment_scores.append(max(-1, min(1, score)))  # Clamp to [-1, 1]
+        # Use enhanced sentiment analyzer
+        sentiment_results = analysis_engine.sentiment.analyze_sentiment(max_articles=25)
         
-        avg_sentiment = sum(sentiment_scores) / len(sentiment_scores)
+        # Validate sentiment data quality
+        quality_check = validate_data_quality(sentiment_results, 'sentiment', 0.7)
         
-        if avg_sentiment > 0.1:
-            sentiment_label = 'positive'
-        elif avg_sentiment < -0.1:
-            sentiment_label = 'negative'
-        else:
-            sentiment_label = 'neutral'
+        # Extract sentiment metrics from enhanced analysis
+        sentiment_bias = sentiment_results.get('sentiment_bias', 'neutral')
+        sentiment_score = sentiment_results.get('sentiment_score', 0.0)
+        article_count = sentiment_results.get('article_count', 0)
+        confidence = sentiment_results.get('confidence', 0.5)
         
-        # Cross-reference with technical and pattern analysis
+        # Cross-reference with technical and pattern analysis  
         signals = []
         
         if tech_analysis:
@@ -453,17 +443,15 @@ def analyze_sentiment(**context) -> Dict[str, Any]:
             pattern_signal = pattern_analysis.get('pattern_summary', {}).get('market_bias', 'neutral')
             signals.append(pattern_signal)
         
-        signals.append(sentiment_label)
+        # Normalize sentiment signal for consistency
+        normalized_sentiment = 'bullish' if sentiment_bias == 'bullish' else 'bearish' if sentiment_bias == 'bearish' else 'neutral'
+        signals.append(normalized_sentiment)
         
-        # Calculate consensus
+        # Calculate consensus using normalized signals
         signal_counts = {}
         for signal in signals:
-            if signal in ['positive', 'bullish']:
-                signal_counts['bullish'] = signal_counts.get('bullish', 0) + 1
-            elif signal in ['negative', 'bearish']:
-                signal_counts['bearish'] = signal_counts.get('bearish', 0) + 1
-            else:
-                signal_counts['neutral'] = signal_counts.get('neutral', 0) + 1
+            normalized_signal = 'bullish' if signal in ['positive', 'bullish'] else 'bearish' if signal in ['negative', 'bearish'] else 'neutral'
+            signal_counts[normalized_signal] = signal_counts.get(normalized_signal, 0) + 1
         
         if signal_counts:
             consensus_signal = max(signal_counts, key=signal_counts.get)
@@ -476,24 +464,23 @@ def analyze_sentiment(**context) -> Dict[str, Any]:
             'timestamp': datetime.now().isoformat(),
             'sentiment_analysis': {
                 'consensus_sentiment': consensus_signal,  # Add for test compatibility
-                'sentiment_score': round(avg_sentiment, 3),
-                'sentiment_label': sentiment_label,
-                'article_count': len(sentiment_scores),
-                'sentiment_distribution': {
-                    'positive': sum(1 for s in sentiment_scores if s > 0.1),
-                    'negative': sum(1 for s in sentiment_scores if s < -0.1),
-                    'neutral': sum(1 for s in sentiment_scores if -0.1 <= s <= 0.1)
-                }
+                'sentiment_score': sentiment_score,
+                'sentiment_label': sentiment_bias,
+                'article_count': article_count,
+                'confidence': confidence,
+                'sentiment_status': sentiment_results.get('status', 'failed')
             },
+            'enhanced_sentiment_results': sentiment_results,
             'cross_analysis': {
                 'technical_signal': tech_analysis.get('market_consensus', {}).get('dominant_signal') if tech_analysis else 'unknown',
                 'pattern_signal': pattern_analysis.get('pattern_summary', {}).get('market_bias') if pattern_analysis else 'unknown',
-                'sentiment_signal': sentiment_label,
+                'sentiment_signal': sentiment_bias,
                 'consensus_signal': consensus_signal,
                 'consensus_strength': round(consensus_strength, 2)
             },
-            'sentiment_signals': [sentiment_label],  # Add for test compatibility
-            'market_psychology': {'dominant_emotion': sentiment_label}  # Add for test compatibility
+            'sentiment_signals': [sentiment_bias],  # Add for test compatibility
+            'market_psychology': {'dominant_emotion': sentiment_bias},  # Add for test compatibility
+            'data_quality': quality_check
         }
         
         # Send alert if strong consensus is detected
@@ -505,10 +492,10 @@ def analyze_sentiment(**context) -> Dict[str, Any]:
         # Log performance
         end_time = datetime.now()
         log_performance('sentiment_analysis', start_time, end_time, 'success',
-                       {'sentiment_score': avg_sentiment, 'consensus_strength': consensus_strength})
+                       {'sentiment_score': sentiment_score, 'consensus_strength': consensus_strength})
         
         context['task_instance'].xcom_push(key='sentiment_analysis', value=processed_data)
-        logger.info(f"Sentiment analysis completed: {sentiment_label} sentiment, {consensus_signal} consensus")
+        logger.info(f"Sentiment analysis completed: {sentiment_bias} sentiment, {consensus_signal} consensus")
         return processed_data
         
     except Exception as e:

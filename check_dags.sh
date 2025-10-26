@@ -70,7 +70,7 @@ for dag_file in $dag_files; do
     dag_name=$(basename "$dag_file" .py | sed 's/_dag$//')
     
     # Test Python import
-    python_test=$(python3 -c "
+    python_test=$(venv/bin/python -c "
 import sys
 sys.path.append('$(pwd)')
 try:
