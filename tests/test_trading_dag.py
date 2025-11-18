@@ -58,30 +58,31 @@ class TestGenerateTradingSignals:
     def test_generate_trading_signals_success(self, mock_get_trading_engine):
         """Test successful trading signal generation."""
         mock_trading_engine = Mock()
-        mock_trading_engine.generate_signals.return_value = {
-            'status': 'success',
-            'signals': {'AAPL': {'signal': 'buy', 'strength': 0.8}}
-        }
+        # Mock the strategy methods
+        mock_trading_engine.momentum_strategy.return_value = {'signal': 'buy', 'confidence': 0.8, 'reasoning': 'Mock momentum'}
+        mock_trading_engine.mean_reversion_strategy.return_value = {'signal': 'hold', 'confidence': 0.5, 'reasoning': 'Mock mean reversion'}
+        mock_trading_engine.breakout_strategy.return_value = {'signal': 'sell', 'confidence': 0.7, 'reasoning': 'Mock breakout'}
+        mock_trading_engine.value_strategy.return_value = {'signal': 'buy', 'confidence': 0.9, 'reasoning': 'Mock value'}
         mock_get_trading_engine.return_value = mock_trading_engine
         
         result = generate_trading_signals(**self.mock_context)
         
-        assert result['symbols_analyzed'] == 3
-        assert 'signal_summary' in result
-        assert 'trading_signals' in result
-        assert result['signal_summary']['market_bias'] == 'bullish'
+        assert 'strategy_results' in result
+        assert 'overall_signal' in result
+        assert 'confidence' in result
+        assert result['overall_signal'] in ['buy', 'sell', 'hold']
         self.mock_context['task_instance'].xcom_push.assert_called_once()
     
     def test_generate_trading_signals_structure(self):
         """Test trading signals output structure."""
         result = generate_trading_signals(**self.mock_context)
         
-        required_keys = ['timestamp', 'symbols_analyzed', 'signal_summary', 'trading_signals', 'execution_priority']
+        required_keys = ['timestamp', 'strategy_results', 'overall_signal', 'confidence', 'signal_distribution', 'performance_metrics']
         assert all(key in result for key in required_keys)
         
-        assert isinstance(result['trading_signals'], dict)
-        assert isinstance(result['execution_priority'], list)
-        assert len(result['execution_priority']) == 3
+        assert isinstance(result['strategy_results'], dict)
+        assert len(result['strategy_results']) == 4  # 4 strategies
+        assert isinstance(result['signal_distribution'], dict)
 
 
 class TestAssessPortfolioRisk:
@@ -106,21 +107,20 @@ class TestAssessPortfolioRisk:
         
         result = assess_portfolio_risk(**self.mock_context)
         
-        assert 'portfolio_risk_assessment' in result
-        assert 'position_risks' in result
         assert 'risk_metrics' in result
-        assert result['portfolio_risk_assessment']['overall_risk_level'] == 'moderate'
+        assert 'daily_loss_status' in result
+        assert 'portfolio_analysis' in result
         self.mock_context['task_instance'].xcom_push.assert_called_once()
     
     def test_assess_portfolio_risk_structure(self):
         """Test risk assessment output structure."""
         result = assess_portfolio_risk(**self.mock_context)
         
-        required_keys = ['timestamp', 'portfolio_risk_assessment', 'position_risks', 'risk_metrics', 'risk_recommendations']
+        required_keys = ['timestamp', 'risk_metrics', 'daily_loss_status', 'portfolio_analysis', 'performance_metrics', 'risk_recommendations']
         assert all(key in result for key in required_keys)
         
-        assert isinstance(result['position_risks'], dict)
-        assert 'portfolio_risk_percentage' in result['portfolio_risk_assessment']
+        assert isinstance(result['risk_metrics'], dict)
+        assert isinstance(result['portfolio_analysis'], dict)
 
 
 class TestCalculatePositionSizes:

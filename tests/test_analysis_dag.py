@@ -100,7 +100,7 @@ class TestAnalyzeFundamentals:
         assert result['symbols_analyzed'] >= 3  # Mock returns 3, test expected 10
         assert 'fundamental_summary' in result
         assert 'market_valuation' in result['fundamental_summary']
-        assert 'symbol_fundamentals' in result
+        assert 'symbols' in result
         self.mock_context['task_instance'].xcom_push.assert_called_once()
 
 

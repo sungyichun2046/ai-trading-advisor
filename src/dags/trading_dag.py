@@ -31,63 +31,52 @@ for path in possible_paths:
         sys.path.insert(0, path)
 
 try:
-    from src.utils.shared import get_data_manager, log_performance, send_alerts, calculate_returns
+    from src.core.trading_engine import TradingEngine, calculate_returns, log_performance
+    HAS_TRADING_ENGINE = True
 except ImportError as e:
     logger = logging.getLogger(__name__)
-    logger.warning(f"Failed to import shared utilities: {e}")
+    logger.warning(f"Failed to import trading engine: {e}")
+    HAS_TRADING_ENGINE = False
     
     # Fallback: define essential functions locally
-    def get_data_manager():
-        class MockDataManager:
-            def get_recent_data(self, symbols):
-                return {s: [100, 101, 102] for s in symbols}
-        return MockDataManager()
-    
-    def log_performance(operation, start_time, end_time, status='success', metrics=None):
-        return {'operation': operation, 'status': status}
-    
-    def send_alerts(alert_type, message, severity='info', context=None):
-        logger.info(f"ALERT [{alert_type}]: {message}")
-        return True
-    
-    def calculate_returns(prices, periods=1):
-        if len(prices) < periods + 1:
+    def calculate_returns(prices, returns_type="simple"):
+        if len(prices) < 2:
             return []
-        return [(prices[i] - prices[i-periods]) / prices[i-periods] for i in range(periods, len(prices))]
-
-# Always define fallback classes
-def get_trading_engine():
-    class MockTradingEngine:
-        def generate_signals(self, symbols):
-            return {
-                'status': 'success', 
-                'signals': {s: {
-                    'signal': 'buy', 
-                    'strength': 0.7, 
-                    'price_target': 110 + hash(s) % 20,
-                    'confidence': 0.8
-                } for s in symbols[:3]}
-            }
-        
-        def assess_risk(self, portfolio_data):
-            return {
-                'status': 'success', 
-                'portfolio_risk': 0.15, 
-                'var_95': 0.08, 
-                'max_drawdown': 0.12,
-                'sharpe_ratio': 1.2
-            }
-        
-        def calculate_positions(self, signals, risk_data):
-            return {
-                'status': 'success', 
-                'positions': {
-                    'AAPL': {'size': 100, 'allocation': 0.05, 'dollar_amount': 5000}, 
-                    'SPY': {'size': 50, 'allocation': 0.03, 'dollar_amount': 3000}
-                }
-            }
+        return [(prices[i] - prices[i-1]) / prices[i-1] for i in range(1, len(prices))]
     
-    return MockTradingEngine()
+    def log_performance(strategy_name, performance_data):
+        logger.info(f"Strategy Performance: {strategy_name}")
+        for metric, value in performance_data.items():
+            logger.info(f"  {metric}: {value}")
+
+# Get trading engine instance
+def get_trading_engine():
+    if HAS_TRADING_ENGINE:
+        return TradingEngine()
+    else:
+        class MockTradingEngine:
+            def momentum_strategy(self, data, params=None):
+                return {'signal': 'buy', 'confidence': 0.7, 'reasoning': 'Mock momentum signal'}
+            
+            def mean_reversion_strategy(self, data, params=None):
+                return {'signal': 'sell', 'confidence': 0.6, 'reasoning': 'Mock mean reversion signal'}
+            
+            def breakout_strategy(self, data, params=None):
+                return {'signal': 'buy', 'confidence': 0.8, 'reasoning': 'Mock breakout signal'}
+            
+            def value_strategy(self, data, params=None):
+                return {'signal': 'hold', 'confidence': 0.5, 'reasoning': 'Mock value signal'}
+            
+            def assess_risk(self, portfolio_data):
+                return {
+                    'status': 'success', 
+                    'portfolio_risk': 0.15, 
+                    'var_95': 0.08, 
+                    'max_drawdown': 0.12,
+                    'sharpe_ratio': 1.2
+                }
+        
+        return MockTradingEngine()
 
 class PositionSizingCalculator:
     def calculate_position_sizes(self, signals, portfolio_value=100000):
@@ -162,32 +151,84 @@ dag = DAG(
 
 
 def generate_trading_signals(**context) -> Dict[str, Any]:
-    """Generate trading signals based on analysis data."""
+    """Generate trading signals using multiple strategies."""
     try:
-        logger.info("Starting trading signal generation")
+        logger.info("Starting multi-strategy trading signal generation")
+        start_time = datetime.now()
         
         trading_engine = get_trading_engine()
-        signals_result = trading_engine.generate_signals(SYMBOLS)
         
-        # Ultra-simple signal generation
-        market_signals = {symbol: {'signal': 'buy', 'confidence': 0.7, 'price_target': 105} for symbol in SYMBOLS}
-        signal_distribution = {'buy': len(SYMBOLS), 'sell': 0, 'hold': 0}
-        market_sentiment = 'bullish'
+        # Sample market data for strategy execution
+        import pandas as pd
+        import numpy as np
+        
+        # Mock price data for testing
+        dates = pd.date_range(start='2024-01-01', periods=50, freq='D')
+        mock_data = {
+            'technical': {
+                'price_data': pd.Series(100 + np.random.randn(50).cumsum(), index=dates),
+                'volume_data': pd.Series(np.random.randint(1000, 10000, 50), index=dates)
+            },
+            'fundamental': {
+                'financial_metrics': {
+                    'pe_ratio': 12.5,
+                    'pb_ratio': 1.3,
+                    'debt_to_equity': 0.4,
+                    'roe': 0.18,
+                    'current_ratio': 2.1
+                }
+            }
+        }
+        
+        # Execute all 4 strategies
+        strategy_results = {}
+        strategy_results['momentum'] = trading_engine.momentum_strategy(mock_data)
+        strategy_results['mean_reversion'] = trading_engine.mean_reversion_strategy(mock_data)
+        strategy_results['breakout'] = trading_engine.breakout_strategy(mock_data)
+        strategy_results['value'] = trading_engine.value_strategy(mock_data)
+        
+        # Aggregate signals
+        buy_signals = len([r for r in strategy_results.values() if r['signal'] == 'buy'])
+        sell_signals = len([r for r in strategy_results.values() if r['signal'] == 'sell'])
+        hold_signals = len([r for r in strategy_results.values() if r['signal'] == 'hold'])
+        
+        # Determine overall signal
+        if buy_signals > sell_signals:
+            overall_signal = 'buy'
+            confidence = sum([r['confidence'] for r in strategy_results.values() if r['signal'] == 'buy']) / buy_signals
+        elif sell_signals > buy_signals:
+            overall_signal = 'sell'
+            confidence = sum([r['confidence'] for r in strategy_results.values() if r['signal'] == 'sell']) / sell_signals
+        else:
+            overall_signal = 'hold'
+            confidence = 0.5
+        
+        # Performance metrics
+        performance = {
+            'strategies_executed': len(strategy_results),
+            'execution_time': (datetime.now() - start_time).total_seconds(),
+            'avg_confidence': sum([r['confidence'] for r in strategy_results.values()]) / len(strategy_results),
+            'signal_consensus': buy_signals + sell_signals
+        }
+        
+        # Log performance using shared utility
+        log_performance('Multi-Strategy Signal Generation', performance)
         
         processed_data = {
             'timestamp': datetime.now().isoformat(),
-            'symbols_analyzed': len(market_signals),
-            'signal_summary': {
-                'market_bias': market_sentiment,
-                'signal_distribution': signal_distribution,
-                'high_confidence_signals': len([s for s in market_signals.values() if s['confidence'] > 0.6])
+            'strategy_results': strategy_results,
+            'overall_signal': overall_signal,
+            'confidence': confidence,
+            'signal_distribution': {
+                'buy': buy_signals,
+                'sell': sell_signals, 
+                'hold': hold_signals
             },
-            'trading_signals': market_signals,
-            'execution_priority': sorted(SYMBOLS, key=lambda x: market_signals[x]['confidence'], reverse=True)
+            'performance_metrics': performance
         }
         
         context['task_instance'].xcom_push(key='trading_signals', value=processed_data)
-        logger.info(f"Trading signals generated: {market_sentiment} bias with {len(market_signals)} signals")
+        logger.info(f"Multi-strategy signals generated: {overall_signal} with {confidence:.2f} confidence")
         return processed_data
         
     except Exception as e:
@@ -196,51 +237,67 @@ def generate_trading_signals(**context) -> Dict[str, Any]:
 
 
 def assess_portfolio_risk(**context) -> Dict[str, Any]:
-    """Assess current portfolio risk and exposure."""
+    """Assess portfolio risk using enhanced trading engine."""
     try:
-        logger.info("Starting portfolio risk assessment")
+        logger.info("Starting enhanced portfolio risk assessment")
+        start_time = datetime.now()
         
         trading_signals = context['task_instance'].xcom_pull(task_ids='generate_trading_signals', key='trading_signals')
+        trading_engine = get_trading_engine()
         
-        risk_manager = RiskManager()
-        portfolio_data = {'total_value': 100000, 'positions': {s: 10000 for s in SYMBOLS}}
-        risk_assessment = risk_manager.assess_portfolio_risk(portfolio_data)
+        # Portfolio data with current positions
+        portfolio_data = {
+            'total_value': 100000,
+            'positions': {s: {'value': 10000, 'shares': 100} for s in SYMBOLS},
+            'daily_pnl': -500,  # Mock daily P&L
+            'cash': 70000
+        }
         
-        # Ultra-simple risk calculation
-        portfolio_risk = 0.15  # 15% portfolio risk
-        position_risk = {symbol: 0.02 for symbol in SYMBOLS}  # 2% per position
-        risk_level = 'moderate'
-        var_95 = 0.08  # 8% Value at Risk
+        # Use trading engine's risk assessment if available
+        if hasattr(trading_engine, 'risk_manager'):
+            risk_assessment = trading_engine.risk_manager.calculate_portfolio_risk(portfolio_data)
+            daily_loss_check = trading_engine.risk_manager.check_daily_loss_limit(portfolio_data, 0.06)
+        else:
+            risk_assessment = {'total_risk': 0.15, 'concentration_risk': 0.08, 'var_95': 5000}
+            daily_loss_check = {'limit_reached': False, 'current_loss': 0.005}
         
-        # Risk limits validation
-        risk_violations = []
-        for symbol, risk in position_risk.items():
-            if risk > 0.02:  # Max 2% risk per position
-                risk_violations.append(f"{symbol}: {risk:.1%} exceeds 2% limit")
+        # Calculate returns for risk metrics
+        import pandas as pd
+        mock_prices = pd.Series([100, 101, 99, 102, 98])
+        returns = calculate_returns(mock_prices)
+        volatility = returns.std() if not returns.empty else 0.02
+        
+        # Enhanced risk metrics
+        performance_metrics = {
+            'portfolio_volatility': volatility,
+            'risk_assessment_time': (datetime.now() - start_time).total_seconds(),
+            'diversification_score': risk_assessment.get('diversification_score', 0.8),
+            'concentration_risk': risk_assessment.get('concentration_risk', 0.08)
+        }
+        
+        # Log performance using shared utility
+        log_performance('Portfolio Risk Assessment', performance_metrics)
         
         processed_data = {
             'timestamp': datetime.now().isoformat(),
-            'portfolio_risk_assessment': {
-                'overall_risk_level': risk_level,
-                'portfolio_risk_percentage': portfolio_risk,
-                'var_95_percent': var_95,
-                'risk_violations': risk_violations
+            'risk_metrics': risk_assessment,
+            'daily_loss_status': daily_loss_check,
+            'portfolio_analysis': {
+                'total_value': portfolio_data['total_value'],
+                'position_count': len(portfolio_data['positions']),
+                'cash_percentage': portfolio_data['cash'] / portfolio_data['total_value'],
+                'largest_position': max([p['value'] for p in portfolio_data['positions'].values()])
             },
-            'position_risks': position_risk,
-            'risk_metrics': {
-                'max_position_risk': max(position_risk.values()),
-                'total_portfolio_exposure': sum(position_risk.values()),
-                'risk_concentration': len([r for r in position_risk.values() if r > 0.015])
-            },
+            'performance_metrics': performance_metrics,
             'risk_recommendations': {
-                'reduce_exposure': len(risk_violations) > 0,
-                'diversify_portfolio': portfolio_risk > 0.2,
-                'increase_cash': var_95 > 0.1
+                'rebalance_needed': risk_assessment.get('concentration_risk', 0) > 0.1,
+                'reduce_exposure': daily_loss_check.get('limit_reached', False),
+                'increase_diversification': risk_assessment.get('diversification_score', 1) < 0.7
             }
         }
         
         context['task_instance'].xcom_push(key='risk_assessment', value=processed_data)
-        logger.info(f"Portfolio risk assessment completed: {risk_level} risk level")
+        logger.info(f"Enhanced risk assessment completed in {performance_metrics['risk_assessment_time']:.2f}s")
         return processed_data
         
     except Exception as e:

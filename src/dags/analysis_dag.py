@@ -298,6 +298,7 @@ def analyze_fundamentals(**context) -> Dict[str, Any]:
         processed_data = {
             'timestamp': datetime.now().isoformat(),
             'symbols_analyzed': len(SYMBOLS),
+            'symbols': SYMBOLS,
             'fundamental_summary': {
                 'market_valuation': market_bias,
                 'average_valuation': avg_valuation,

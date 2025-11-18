@@ -12,7 +12,8 @@ from src.core.trading_engine import (
     TradingEngine, RiskManager, StrategyEngine, UserProfileManager, PortfolioOptimizer,
     TradeRecommendation, TradingParameters, RiskProfile, Strategy,
     RiskLevel, RiskCategory, TradeAction, StrategyType, MarketRegime, SizingMethod,
-    validate_trade_parameters, calculate_risk_adjusted_return, format_recommendation
+    validate_trade_parameters, calculate_risk_adjusted_return, format_recommendation,
+    calculate_returns, log_performance
 )
 
 
@@ -575,6 +576,216 @@ class TestDataClasses:
         assert RiskCategory.MODERATE in strategy.suitable_risk_categories
 
 
+class TestTradingStrategies:
+    """Test the 4 trading strategy implementations."""
+    
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.trading_engine = TradingEngine()
+        
+        # Sample market data for testing strategies
+        dates = pd.date_range(start='2024-01-01', periods=30, freq='D')
+        self.sample_data = {
+            'technical': {
+                'price_data': pd.Series(100 + np.random.randn(30).cumsum(), index=dates),
+                'volume_data': pd.Series(np.random.randint(1000, 10000, 30), index=dates)
+            },
+            'fundamental': {
+                'financial_metrics': {
+                    'pe_ratio': 12.5,
+                    'pb_ratio': 1.3,
+                    'debt_to_equity': 0.4,
+                    'roe': 0.18,
+                    'current_ratio': 2.1
+                }
+            }
+        }
+    
+    def test_momentum_strategy(self):
+        """Test momentum strategy implementation."""
+        result = self.trading_engine.momentum_strategy(self.sample_data)
+        
+        assert "signal" in result
+        assert "confidence" in result
+        assert "reasoning" in result
+        assert "performance" in result
+        assert result["signal"] in ["buy", "sell", "hold"]
+        assert 0 <= result["confidence"] <= 1
+        assert "momentum_value" in result["performance"]
+    
+    def test_momentum_strategy_with_params(self):
+        """Test momentum strategy with custom parameters."""
+        params = {"lookback_period": 10, "threshold": 0.03}
+        result = self.trading_engine.momentum_strategy(self.sample_data, params)
+        
+        assert "signal" in result
+        assert "performance" in result
+    
+    def test_momentum_strategy_no_data(self):
+        """Test momentum strategy with no price data."""
+        empty_data = {'technical': {'price_data': pd.Series(dtype=float)}}
+        result = self.trading_engine.momentum_strategy(empty_data)
+        
+        assert result["signal"] == "hold"
+        assert result["confidence"] == 0.0
+        assert "No price data" in result["reasoning"]
+    
+    def test_mean_reversion_strategy(self):
+        """Test mean reversion strategy implementation."""
+        result = self.trading_engine.mean_reversion_strategy(self.sample_data)
+        
+        assert "signal" in result
+        assert "confidence" in result
+        assert "reasoning" in result
+        assert "performance" in result
+        assert result["signal"] in ["buy", "sell", "hold"]
+        assert "z_score" in result["performance"]
+        assert "mean_price" in result["performance"]
+    
+    def test_mean_reversion_strategy_insufficient_data(self):
+        """Test mean reversion strategy with insufficient data."""
+        short_data = {
+            'technical': {
+                'price_data': pd.Series([100, 101, 102])  # Only 3 points
+            }
+        }
+        result = self.trading_engine.mean_reversion_strategy(short_data)
+        
+        assert result["signal"] == "hold"
+        assert "Insufficient data" in result["reasoning"]
+    
+    def test_breakout_strategy(self):
+        """Test breakout strategy implementation."""
+        result = self.trading_engine.breakout_strategy(self.sample_data)
+        
+        assert "signal" in result
+        assert "confidence" in result
+        assert "reasoning" in result
+        assert "performance" in result
+        assert result["signal"] in ["buy", "sell", "hold"]
+        assert "high_level" in result["performance"]
+        assert "low_level" in result["performance"]
+        assert "volume_confirmed" in result["performance"]
+    
+    def test_breakout_strategy_with_volume_confirmation(self):
+        """Test breakout strategy with volume confirmation."""
+        # Modify data to simulate high volume breakout
+        modified_data = self.sample_data.copy()
+        modified_data['technical']['volume_data'].iloc[-1] = 20000  # High volume
+        
+        result = self.trading_engine.breakout_strategy(modified_data)
+        assert "volume_confirmed" in result["performance"]
+    
+    def test_value_strategy(self):
+        """Test value investing strategy implementation."""
+        result = self.trading_engine.value_strategy(self.sample_data)
+        
+        assert "signal" in result
+        assert "confidence" in result
+        assert "reasoning" in result
+        assert "performance" in result
+        assert result["signal"] in ["buy", "sell", "hold"]
+        assert "value_score" in result["performance"]
+        assert "pe_ratio" in result["performance"]
+        assert "pb_ratio" in result["performance"]
+    
+    def test_value_strategy_undervalued_stock(self):
+        """Test value strategy with undervalued stock."""
+        undervalued_data = self.sample_data.copy()
+        undervalued_data['fundamental']['financial_metrics'].update({
+            'pe_ratio': 8.0,   # Low P/E
+            'pb_ratio': 0.8,   # Low P/B
+            'debt_to_equity': 0.3,  # Low debt
+            'roe': 0.20,       # High ROE
+            'current_ratio': 2.5   # Good liquidity
+        })
+        
+        result = self.trading_engine.value_strategy(undervalued_data)
+        
+        assert result["signal"] == "buy"
+        assert result["confidence"] > 0.5
+        assert result["performance"]["value_score"] >= 4
+    
+    def test_value_strategy_overvalued_stock(self):
+        """Test value strategy with overvalued stock."""
+        overvalued_data = self.sample_data.copy()
+        overvalued_data['fundamental']['financial_metrics'].update({
+            'pe_ratio': 35.0,   # High P/E
+            'pb_ratio': 4.0,    # High P/B
+            'debt_to_equity': 0.8,  # High debt
+            'roe': 0.05,        # Low ROE
+            'current_ratio': 0.8    # Poor liquidity
+        })
+        
+        result = self.trading_engine.value_strategy(overvalued_data)
+        
+        assert result["performance"]["value_score"] <= -2
+    
+    def test_strategy_error_handling(self):
+        """Test strategy error handling with invalid data."""
+        invalid_data = {"technical": {"price_data": "invalid"}}
+        
+        result = self.trading_engine.momentum_strategy(invalid_data)
+        assert result["signal"] == "hold"
+        assert result["confidence"] == 0.0
+        assert "Error" in result["reasoning"]
+
+
+class TestSharedUtilities:
+    """Test shared utility functions."""
+    
+    def test_calculate_returns_simple(self):
+        """Test simple returns calculation."""
+        prices = pd.Series([100, 105, 110, 108, 112])
+        returns = calculate_returns(prices, "simple")
+        
+        expected = [0.0, 0.05, 0.047619, -0.018182, 0.037037]
+        assert len(returns) == 5
+        # Check that returns are approximately correct (skip first NaN/0 value)
+        for i in range(1, 5):
+            assert abs(returns.iloc[i] - expected[i]) < 0.001
+    
+    def test_calculate_returns_log(self):
+        """Test logarithmic returns calculation."""
+        prices = pd.Series([100, 105, 110])
+        returns = calculate_returns(prices, "log")
+        
+        assert len(returns) == 3
+        assert returns.iloc[1] > 0  # Price increased (skip first 0 value)
+        assert returns.iloc[2] > 0  # Price increased
+    
+    def test_calculate_returns_empty_series(self):
+        """Test returns calculation with empty series."""
+        prices = pd.Series(dtype=float)
+        returns = calculate_returns(prices)
+        
+        assert returns.empty
+    
+    def test_calculate_returns_single_value(self):
+        """Test returns calculation with single value."""
+        prices = pd.Series([100])
+        returns = calculate_returns(prices)
+        
+        assert returns.empty
+    
+    def test_log_performance(self, caplog):
+        """Test performance logging function."""
+        import logging
+        with caplog.at_level(logging.INFO):
+            performance_data = {
+                "total_return": 0.15,
+                "sharpe_ratio": 1.2,
+                "trades": 25
+            }
+            
+            log_performance("Test Strategy", performance_data)
+            
+            assert "Strategy Performance: Test Strategy" in caplog.text
+            assert "total_return: 0.1500" in caplog.text
+            assert "sharpe_ratio: 1.2000" in caplog.text
+            assert "trades: 25" in caplog.text
+
+
 class TestErrorHandling:
     """Test error handling scenarios."""
     
@@ -649,3 +860,84 @@ class TestEnumValues:
         assert MarketRegime.BULL_MARKET.value == "bull_market"
         assert MarketRegime.BEAR_MARKET.value == "bear_market"
         assert MarketRegime.SIDEWAYS_MARKET.value == "sideways_market"
+
+
+class TestStrategyIntegration:
+    """Test strategy integration with trading engine."""
+    
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.trading_engine = TradingEngine()
+    
+    def test_all_strategies_execution(self):
+        """Test all 4 strategies can be executed successfully."""
+        # Create sample data
+        dates = pd.date_range(start='2024-01-01', periods=25, freq='D')
+        sample_data = {
+            'technical': {
+                'price_data': pd.Series(100 + np.random.randn(25).cumsum(), index=dates),
+                'volume_data': pd.Series(np.random.randint(1000, 10000, 25), index=dates)
+            },
+            'fundamental': {
+                'financial_metrics': {
+                    'pe_ratio': 15.0,
+                    'pb_ratio': 1.5,
+                    'debt_to_equity': 0.5,
+                    'roe': 0.15,
+                    'current_ratio': 1.8
+                }
+            }
+        }
+        
+        # Execute all strategies
+        momentum_result = self.trading_engine.momentum_strategy(sample_data)
+        mean_reversion_result = self.trading_engine.mean_reversion_strategy(sample_data)
+        breakout_result = self.trading_engine.breakout_strategy(sample_data)
+        value_result = self.trading_engine.value_strategy(sample_data)
+        
+        # Verify all strategies return valid results
+        for result in [momentum_result, mean_reversion_result, breakout_result, value_result]:
+            assert "signal" in result
+            assert "confidence" in result
+            assert "reasoning" in result
+            assert "performance" in result
+            assert result["signal"] in ["buy", "sell", "hold"]
+            assert 0 <= result["confidence"] <= 1
+    
+    def test_strategy_consensus_calculation(self):
+        """Test calculation of strategy consensus."""
+        # Mock data that should generate consistent signals
+        dates = pd.date_range(start='2024-01-01', periods=25, freq='D')
+        bullish_data = {
+            'technical': {
+                'price_data': pd.Series(100 + np.arange(25) * 0.5, index=dates),  # Uptrending
+                'volume_data': pd.Series([2000] * 25, index=dates)
+            },
+            'fundamental': {
+                'financial_metrics': {
+                    'pe_ratio': 10.0,   # Undervalued
+                    'pb_ratio': 1.0,    # Undervalued
+                    'debt_to_equity': 0.3,  # Low debt
+                    'roe': 0.20,        # High ROE
+                    'current_ratio': 2.5    # Good liquidity
+                }
+            }
+        }
+        
+        # Execute strategies
+        results = {
+            'momentum': self.trading_engine.momentum_strategy(bullish_data),
+            'mean_reversion': self.trading_engine.mean_reversion_strategy(bullish_data),
+            'breakout': self.trading_engine.breakout_strategy(bullish_data),
+            'value': self.trading_engine.value_strategy(bullish_data)
+        }
+        
+        # Count buy signals
+        buy_signals = sum(1 for result in results.values() if result['signal'] == 'buy')
+        
+        # With bullish data, we should get at least some buy signals
+        assert buy_signals >= 1
+        
+        # Calculate average confidence
+        avg_confidence = sum(result['confidence'] for result in results.values()) / len(results)
+        assert avg_confidence > 0

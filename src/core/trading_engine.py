@@ -33,7 +33,17 @@ except ImportError:
     logging.warning("cvxpy unavailable. Using basic portfolio optimization.")
 
 # Configuration
-from ..config import settings
+try:
+    from ..config import settings
+except ImportError:
+    # Fallback settings for Docker environment
+    class MockSettings:
+        DATABASE_URL = "postgresql://airflow:airflow@test-postgres:5432/airflow"
+        REDIS_URL = "redis://localhost:6379"
+        USE_REAL_DATA = False
+        API_TIMEOUT = 30
+        MAX_RETRIES = 3
+    settings = MockSettings()
 
 logger = logging.getLogger(__name__)
 
@@ -1209,6 +1219,314 @@ class TradingEngine:
             "risk_metrics": {},
             "diversification_score": 0.8
         }
+    
+    # Strategy Implementation Functions
+    def momentum_strategy(self, data: Dict[str, Any], params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Momentum trading strategy implementation.
+        
+        Args:
+            data: Market data and analysis results
+            params: Strategy parameters
+            
+        Returns:
+            Strategy results and signals
+        """
+        try:
+            params = params or {"lookback_period": 20, "threshold": 0.02}
+            
+            # Get price data
+            price_data = data.get("technical", {}).get("price_data", pd.Series(dtype=float))
+            if price_data.empty:
+                return {"signal": "hold", "confidence": 0.0, "reasoning": "No price data"}
+            
+            # Calculate returns using shared utility
+            returns = calculate_returns(price_data)
+            
+            # Calculate momentum
+            lookback = params["lookback_period"]
+            if len(returns) < lookback:
+                momentum = 0.0
+            else:
+                momentum = returns.tail(lookback).mean()
+            
+            # Generate signal
+            threshold = params["threshold"]
+            if momentum > threshold:
+                signal = "buy"
+                confidence = min(0.9, abs(momentum) * 10)
+            elif momentum < -threshold:
+                signal = "sell" 
+                confidence = min(0.9, abs(momentum) * 10)
+            else:
+                signal = "hold"
+                confidence = 0.3
+            
+            # Performance metrics
+            performance = {
+                "momentum_value": momentum,
+                "signal_strength": confidence,
+                "returns_mean": returns.mean(),
+                "returns_std": returns.std()
+            }
+            
+            # Log performance using shared utility
+            log_performance("Momentum Strategy", performance)
+            
+            return {
+                "signal": signal,
+                "confidence": confidence,
+                "reasoning": f"Momentum: {momentum:.4f}, threshold: {threshold}",
+                "performance": performance
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in momentum strategy: {e}")
+            return {"signal": "hold", "confidence": 0.0, "reasoning": f"Error: {str(e)}"}
+    
+    def mean_reversion_strategy(self, data: Dict[str, Any], params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Mean reversion trading strategy implementation.
+        
+        Args:
+            data: Market data and analysis results
+            params: Strategy parameters
+            
+        Returns:
+            Strategy results and signals
+        """
+        try:
+            params = params or {"window": 20, "num_std": 2.0}
+            
+            # Get price data
+            price_data = data.get("technical", {}).get("price_data", pd.Series(dtype=float))
+            if price_data.empty:
+                return {"signal": "hold", "confidence": 0.0, "reasoning": "No price data"}
+            
+            # Calculate returns using shared utility
+            returns = calculate_returns(price_data)
+            
+            # Calculate mean reversion indicators
+            window = params["window"]
+            if len(price_data) < window:
+                return {"signal": "hold", "confidence": 0.0, "reasoning": "Insufficient data"}
+                
+            mean_price = price_data.rolling(window).mean().iloc[-1]
+            std_price = price_data.rolling(window).std().iloc[-1]
+            current_price = price_data.iloc[-1]
+            
+            # Calculate Z-score
+            z_score = (current_price - mean_price) / std_price if std_price > 0 else 0
+            
+            # Generate signal
+            num_std = params["num_std"]
+            if z_score > num_std:
+                signal = "sell"  # Price too high, expect reversion
+                confidence = min(0.9, abs(z_score) / num_std - 1)
+            elif z_score < -num_std:
+                signal = "buy"   # Price too low, expect reversion
+                confidence = min(0.9, abs(z_score) / num_std - 1)
+            else:
+                signal = "hold"
+                confidence = 0.2
+            
+            # Performance metrics
+            performance = {
+                "z_score": z_score,
+                "mean_price": mean_price,
+                "current_price": current_price,
+                "volatility": std_price
+            }
+            
+            # Log performance using shared utility
+            log_performance("Mean Reversion Strategy", performance)
+            
+            return {
+                "signal": signal,
+                "confidence": confidence,
+                "reasoning": f"Z-score: {z_score:.2f}, threshold: ±{num_std}",
+                "performance": performance
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in mean reversion strategy: {e}")
+            return {"signal": "hold", "confidence": 0.0, "reasoning": f"Error: {str(e)}"}
+    
+    def breakout_strategy(self, data: Dict[str, Any], params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Breakout trading strategy implementation.
+        
+        Args:
+            data: Market data and analysis results
+            params: Strategy parameters
+            
+        Returns:
+            Strategy results and signals
+        """
+        try:
+            params = params or {"lookback_period": 20, "volume_threshold": 1.5}
+            
+            # Get price and volume data
+            technical_data = data.get("technical", {})
+            price_data = technical_data.get("price_data", pd.Series(dtype=float))
+            volume_data = technical_data.get("volume_data", pd.Series(dtype=float))
+            
+            if price_data.empty:
+                return {"signal": "hold", "confidence": 0.0, "reasoning": "No price data"}
+            
+            # Calculate returns using shared utility
+            returns = calculate_returns(price_data)
+            
+            # Calculate breakout levels
+            lookback = params["lookback_period"]
+            if len(price_data) < lookback:
+                return {"signal": "hold", "confidence": 0.0, "reasoning": "Insufficient data"}
+                
+            high_level = price_data.tail(lookback).max()
+            low_level = price_data.tail(lookback).min()
+            current_price = price_data.iloc[-1]
+            
+            # Check volume confirmation
+            volume_confirmed = True
+            if not volume_data.empty and len(volume_data) >= lookback:
+                avg_volume = volume_data.tail(lookback).mean()
+                current_volume = volume_data.iloc[-1]
+                volume_ratio = current_volume / avg_volume if avg_volume > 0 else 1
+                volume_confirmed = volume_ratio >= params["volume_threshold"]
+            
+            # Generate signal
+            price_range = high_level - low_level
+            if current_price > high_level and volume_confirmed:
+                signal = "buy"
+                confidence = 0.8 if volume_confirmed else 0.5
+            elif current_price < low_level and volume_confirmed:
+                signal = "sell"
+                confidence = 0.8 if volume_confirmed else 0.5
+            else:
+                signal = "hold"
+                confidence = 0.2
+            
+            # Performance metrics
+            performance = {
+                "high_level": high_level,
+                "low_level": low_level,
+                "current_price": current_price,
+                "price_range": price_range,
+                "volume_confirmed": volume_confirmed
+            }
+            
+            # Log performance using shared utility
+            log_performance("Breakout Strategy", performance)
+            
+            return {
+                "signal": signal,
+                "confidence": confidence,
+                "reasoning": f"Price: {current_price:.2f}, Range: [{low_level:.2f}, {high_level:.2f}], Volume OK: {volume_confirmed}",
+                "performance": performance
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in breakout strategy: {e}")
+            return {"signal": "hold", "confidence": 0.0, "reasoning": f"Error: {str(e)}"}
+    
+    def value_strategy(self, data: Dict[str, Any], params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Value investing strategy implementation.
+        
+        Args:
+            data: Market data and analysis results
+            params: Strategy parameters
+            
+        Returns:
+            Strategy results and signals
+        """
+        try:
+            params = params or {"pe_threshold": 15, "pb_threshold": 1.5, "debt_ratio_max": 0.6}
+            
+            # Get fundamental data
+            fundamental_data = data.get("fundamental", {})
+            financial_metrics = fundamental_data.get("financial_metrics", {})
+            
+            # Get price data for technical confirmation
+            price_data = data.get("technical", {}).get("price_data", pd.Series(dtype=float))
+            returns = calculate_returns(price_data) if not price_data.empty else pd.Series(dtype=float)
+            
+            # Extract key metrics (with defaults for missing data)
+            pe_ratio = financial_metrics.get("pe_ratio", 20.0)
+            pb_ratio = financial_metrics.get("pb_ratio", 2.0)
+            debt_ratio = financial_metrics.get("debt_to_equity", 0.5)
+            roe = financial_metrics.get("roe", 0.1)
+            current_ratio = financial_metrics.get("current_ratio", 1.5)
+            
+            # Value scoring
+            value_score = 0
+            reasons = []
+            
+            # P/E ratio check
+            if pe_ratio < params["pe_threshold"]:
+                value_score += 2
+                reasons.append(f"Low P/E: {pe_ratio:.1f}")
+            elif pe_ratio > params["pe_threshold"] * 2:
+                value_score -= 1
+                reasons.append(f"High P/E: {pe_ratio:.1f}")
+            
+            # P/B ratio check
+            if pb_ratio < params["pb_threshold"]:
+                value_score += 2
+                reasons.append(f"Low P/B: {pb_ratio:.1f}")
+            
+            # Debt ratio check
+            if debt_ratio < params["debt_ratio_max"]:
+                value_score += 1
+                reasons.append(f"Low debt: {debt_ratio:.1f}")
+            else:
+                value_score -= 1
+                reasons.append(f"High debt: {debt_ratio:.1f}")
+            
+            # ROE check
+            if roe > 0.15:
+                value_score += 1
+                reasons.append(f"Good ROE: {roe:.1%}")
+            
+            # Current ratio check
+            if current_ratio > 1.2:
+                value_score += 1
+                reasons.append(f"Good liquidity: {current_ratio:.1f}")
+            
+            # Generate signal
+            if value_score >= 4:
+                signal = "buy"
+                confidence = min(0.9, value_score / 6)
+            elif value_score <= -2:
+                signal = "sell"
+                confidence = min(0.7, abs(value_score) / 4)
+            else:
+                signal = "hold"
+                confidence = 0.3
+            
+            # Performance metrics
+            performance = {
+                "value_score": value_score,
+                "pe_ratio": pe_ratio,
+                "pb_ratio": pb_ratio,
+                "debt_ratio": debt_ratio,
+                "roe": roe,
+                "current_ratio": current_ratio
+            }
+            
+            # Log performance using shared utility
+            log_performance("Value Strategy", performance)
+            
+            return {
+                "signal": signal,
+                "confidence": confidence,
+                "reasoning": f"Value score: {value_score}/6. {'; '.join(reasons)}",
+                "performance": performance
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in value strategy: {e}")
+            return {"signal": "hold", "confidence": 0.0, "reasoning": f"Error: {str(e)}"}
 
 
 # Utility Functions
@@ -1224,6 +1542,49 @@ def validate_trade_parameters(trade: Dict[str, Any]) -> bool:
     """
     required_fields = ["symbol", "action", "quantity", "price"]
     return all(field in trade for field in required_fields)
+
+
+def calculate_returns(prices: pd.Series, returns_type: str = "simple") -> pd.Series:
+    """
+    Shared utility: Calculate returns from price series.
+    
+    Args:
+        prices: Price series
+        returns_type: Type of returns ('simple' or 'log')
+        
+    Returns:
+        Returns series
+    """
+    try:
+        if len(prices) < 2:
+            return pd.Series(dtype=float)
+            
+        if returns_type == "log":
+            return np.log(prices / prices.shift(1)).fillna(0)
+        else:
+            return (prices / prices.shift(1) - 1).fillna(0)
+    except Exception as e:
+        logger.error(f"Error calculating returns: {e}")
+        return pd.Series(dtype=float)
+
+
+def log_performance(strategy_name: str, performance_data: Dict[str, Any]) -> None:
+    """
+    Shared utility: Log strategy performance metrics.
+    
+    Args:
+        strategy_name: Name of the strategy
+        performance_data: Performance metrics dictionary
+    """
+    try:
+        logger.info(f"Strategy Performance: {strategy_name}")
+        for metric, value in performance_data.items():
+            if isinstance(value, (int, float)):
+                logger.info(f"  {metric}: {value:.4f}")
+            else:
+                logger.info(f"  {metric}: {value}")
+    except Exception as e:
+        logger.error(f"Error logging performance for {strategy_name}: {e}")
 
 
 def calculate_risk_adjusted_return(returns: pd.Series, benchmark: pd.Series) -> Dict[str, float]:
