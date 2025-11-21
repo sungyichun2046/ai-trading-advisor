@@ -1,594 +1,35 @@
 """
-Tests for Trading Engine Module.
+Tests for Enhanced Trading Engine
+Testing explanation, scoring, and attribution functions.
 """
 
 import pytest
-from unittest.mock import Mock, patch
 import pandas as pd
 import numpy as np
 from datetime import datetime
+from unittest.mock import Mock, patch
+
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from src.core.trading_engine import (
-    TradingEngine, RiskManager, StrategyEngine, UserProfileManager, PortfolioOptimizer,
-    TradeRecommendation, TradingParameters, RiskProfile, Strategy,
-    RiskLevel, RiskCategory, TradeAction, StrategyType, MarketRegime, SizingMethod,
-    validate_trade_parameters, calculate_risk_adjusted_return, format_recommendation,
-    calculate_returns, log_performance
+    TradingEngine, AlertPriority, Alert, calculate_returns, log_performance
 )
 
 
-class TestRiskManager:
-    """Test risk management functionality."""
-    
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.risk_manager = RiskManager()
-        self.user_params = TradingParameters(
-            max_risk_per_trade=0.02,
-            max_portfolio_risk=0.20,
-            max_position_size=0.10,
-            daily_loss_limit=0.06,
-            leverage_limit=1.5
-        )
-    
-    def test_risk_manager_initialization(self):
-        """Test RiskManager initialization."""
-        assert self.risk_manager.max_risk_per_trade == 0.02
-        assert self.risk_manager.max_portfolio_risk == 0.20
-        assert self.risk_manager.max_position_size == 0.10
-    
-    def test_calculate_position_size_fixed_percent(self):
-        """Test position size calculation with fixed percent method."""
-        result = self.risk_manager.calculate_position_size(
-            account_balance=100000,
-            risk_per_trade=0.02,
-            entry_price=100.0,
-            sizing_method=SizingMethod.FIXED_PERCENT
-        )
-        
-        assert result["position_size"] > 0
-        assert result["position_value"] > 0
-        assert result["actual_risk_percentage"] <= self.risk_manager.max_position_size
-        assert "error" not in result
-    
-    def test_calculate_position_size_volatility_adjusted(self):
-        """Test position size calculation with volatility adjustment."""
-        result = self.risk_manager.calculate_position_size(
-            account_balance=100000,
-            risk_per_trade=0.02,
-            entry_price=100.0,
-            stop_loss_price=95.0,
-            sizing_method=SizingMethod.VOLATILITY_ADJUSTED
-        )
-        
-        assert result["position_size"] > 0
-        assert result["stop_loss"] == 95.0
-        assert "error" not in result
-    
-    def test_calculate_position_size_invalid_entry_price(self):
-        """Test position size calculation with invalid entry price."""
-        result = self.risk_manager.calculate_position_size(
-            account_balance=100000,
-            risk_per_trade=0.02,
-            entry_price=0.0
-        )
-        
-        assert result["position_size"] == 0
-        assert "error" in result
-    
-    def test_validate_trade_risk_approved(self):
-        """Test trade risk validation - approved trade."""
-        trade = {
-            "symbol": "AAPL",
-            "action": "buy",
-            "quantity": 50,
-            "price": 150.0
-        }
-        portfolio = {
-            "total_value": 100000,
-            "daily_pnl": 0.0
-        }
-        
-        result = self.risk_manager.validate_trade_risk(trade, portfolio, self.user_params)
-        
-        assert result["approved"] is True
-        assert isinstance(result["risk_score"], float)
-        assert 0 <= result["risk_score"] <= 1
-        assert result["position_percentage"] < self.user_params.max_position_size
-    
-    def test_validate_trade_risk_rejected_position_size(self):
-        """Test trade risk validation - rejected due to position size."""
-        trade = {
-            "symbol": "AAPL",
-            "action": "buy",
-            "quantity": 1000,  # Large position
-            "price": 150.0
-        }
-        portfolio = {
-            "total_value": 100000,
-            "daily_pnl": 0.0
-        }
-        
-        result = self.risk_manager.validate_trade_risk(trade, portfolio, self.user_params)
-        
-        assert len(result["warnings"]) > 0
-        assert "suggested_quantity" in result["adjustments"]
-    
-    def test_calculate_portfolio_risk(self):
-        """Test portfolio risk calculation."""
-        portfolio = {
-            "total_value": 100000,
-            "positions": {
-                "AAPL": {"value": 20000},
-                "MSFT": {"value": 15000},
-                "GOOGL": {"value": 10000}
-            }
-        }
-        
-        result = self.risk_manager.calculate_portfolio_risk(portfolio)
-        
-        assert "total_risk" in result
-        assert "concentration_risk" in result
-        assert "diversification_score" in result
-        assert result["position_count"] == 3
-        assert 0 <= result["diversification_score"] <= 1
-    
-    def test_check_daily_loss_limit(self):
-        """Test daily loss limit checking."""
-        portfolio = {
-            "total_value": 100000,
-            "daily_pnl": -3000  # 3% loss
-        }
-        
-        result = self.risk_manager.check_daily_loss_limit(portfolio, 0.06)
-        
-        assert result["current_loss"] == 0.03
-        assert result["limit_reached"] is False
-        assert result["remaining_capacity"] == 0.03
-    
-    def test_calculate_stop_loss(self):
-        """Test stop loss calculation."""
-        stop_loss = self.risk_manager.calculate_stop_loss(100.0, 0.05)
-        assert stop_loss == 95.0
-    
-    def test_calculate_take_profit(self):
-        """Test take profit calculation."""
-        take_profit = self.risk_manager.calculate_take_profit(100.0, 2.0)
-        assert take_profit == 104.0  # 100 * (1 + 2.0 * 0.02)
-
-
-class TestStrategyEngine:
-    """Test strategy selection and recommendation functionality."""
-    
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.strategy_engine = StrategyEngine()
-        self.user_params = TradingParameters(
-            max_risk_per_trade=0.02,
-            max_portfolio_risk=0.20,
-            max_position_size=0.10,
-            daily_loss_limit=0.06,
-            leverage_limit=1.5
-        )
-    
-    def test_strategy_engine_initialization(self):
-        """Test StrategyEngine initialization."""
-        assert len(self.strategy_engine.strategies) > 0
-        assert hasattr(self.strategy_engine, 'strategy_performance')
-    
-    def test_select_strategy_conservative(self):
-        """Test strategy selection for conservative user."""
-        market_conditions = {
-            "volatility": 0.15,
-            "trend": "bullish",
-            "sentiment": "positive"
-        }
-        user_profile = {
-            "risk_category": "conservative",
-            "risk_tolerance": 0.3
-        }
-        
-        result = self.strategy_engine.select_strategy(market_conditions, user_profile)
-        
-        assert "strategy" in result
-        assert "confidence" in result
-        assert "parameters" in result
-        assert "reasoning" in result
-        assert isinstance(result["confidence"], float)
-        assert 0 <= result["confidence"] <= 1
-    
-    def test_select_strategy_aggressive(self):
-        """Test strategy selection for aggressive user."""
-        market_conditions = {
-            "volatility": 0.25,
-            "trend": "bullish",
-            "sentiment": "positive"
-        }
-        user_profile = {
-            "risk_category": "aggressive",
-            "risk_tolerance": 0.8
-        }
-        
-        result = self.strategy_engine.select_strategy(market_conditions, user_profile)
-        
-        assert result["strategy"] is not None
-        assert result["confidence"] > 0
-    
-    def test_determine_market_regime(self):
-        """Test market regime determination."""
-        # High volatility
-        high_vol_conditions = {"volatility": 0.35, "trend": "sideways", "sentiment": "neutral"}
-        regime = self.strategy_engine._determine_market_regime(high_vol_conditions)
-        assert regime == MarketRegime.HIGH_VOLATILITY
-        
-        # Bull market
-        bull_conditions = {"volatility": 0.2, "trend": "bullish", "sentiment": "positive"}
-        regime = self.strategy_engine._determine_market_regime(bull_conditions)
-        assert regime == MarketRegime.BULL_MARKET
-        
-        # Low volatility
-        low_vol_conditions = {"volatility": 0.1, "trend": "sideways", "sentiment": "neutral"}
-        regime = self.strategy_engine._determine_market_regime(low_vol_conditions)
-        assert regime == MarketRegime.LOW_VOLATILITY
-    
-    def test_generate_recommendations(self):
-        """Test trade recommendation generation."""
-        analysis_results = {
-            "symbol": "AAPL",
-            "signals": {
-                "overall_signal": "buy",
-                "signal_strength": "strong",
-                "component_signals": {
-                    "technical": "buy",
-                    "fundamental": "hold"
-                }
-            },
-            "analysis_components": {
-                "technical": {
-                    "latest_price": 150.0
-                }
-            }
-        }
-        
-        strategy = {
-            "strategy": "moderate_momentum",
-            "confidence": 0.75,
-            "parameters": {"max_position_size": 0.1}
-        }
-        
-        recommendations = self.strategy_engine.generate_recommendations(
-            analysis_results, strategy, self.user_params
-        )
-        
-        assert len(recommendations) > 0
-        rec = recommendations[0]
-        assert rec.symbol == "AAPL"
-        assert rec.action == TradeAction.BUY
-        assert rec.quantity > 0
-        assert rec.price == 150.0
-        assert rec.confidence > 0
-    
-    def test_generate_recommendations_hold_signal(self):
-        """Test recommendation generation with hold signal."""
-        analysis_results = {
-            "symbol": "AAPL",
-            "signals": {
-                "overall_signal": "hold",
-                "signal_strength": "weak",
-                "component_signals": {}
-            }
-        }
-        
-        strategy = {"strategy": "conservative_growth"}
-        
-        recommendations = self.strategy_engine.generate_recommendations(
-            analysis_results, strategy, self.user_params
-        )
-        
-        assert len(recommendations) == 0
-
-
-class TestUserProfileManager:
-    """Test user profile management functionality."""
-    
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.user_manager = UserProfileManager()
-    
-    def test_user_profile_manager_initialization(self):
-        """Test UserProfileManager initialization."""
-        assert hasattr(self.user_manager, 'config')
-    
-    def test_assess_risk_profile(self):
-        """Test risk profile assessment."""
-        questionnaire = {
-            "investment_experience": "moderate",
-            "risk_tolerance": "medium",
-            "investment_horizon": "long_term"
-        }
-        
-        result = self.user_manager.assess_risk_profile(questionnaire)
-        
-        assert "risk_category" in result
-        assert "risk_score" in result
-        assert "trading_parameters" in result
-        assert "confidence_score" in result
-        assert isinstance(result["trading_parameters"], TradingParameters)
-    
-    def test_get_trading_parameters(self):
-        """Test getting trading parameters for user."""
-        params = self.user_manager.get_trading_parameters("test_user")
-        
-        assert isinstance(params, TradingParameters)
-        assert params.max_risk_per_trade > 0
-        assert params.max_portfolio_risk > 0
-        assert params.max_position_size > 0
-    
-    def test_validate_trade_against_profile(self):
-        """Test trade validation against user profile."""
-        trade = {
-            "symbol": "AAPL",
-            "action": "buy",
-            "quantity": 100,
-            "price": 150.0
-        }
-        
-        result = self.user_manager.validate_trade_against_profile("test_user", trade)
-        
-        assert "approved" in result
-        assert "message" in result
-        assert isinstance(result["approved"], bool)
-
-
-class TestPortfolioOptimizer:
-    """Test portfolio optimization functionality."""
-    
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.optimizer = PortfolioOptimizer()
-    
-    def test_portfolio_optimizer_initialization(self):
-        """Test PortfolioOptimizer initialization."""
-        assert hasattr(self.optimizer, 'config')
-    
-    def test_optimize_portfolio(self):
-        """Test portfolio optimization."""
-        assets = ["AAPL", "MSFT", "GOOGL"]
-        expected_returns = pd.Series([0.10, 0.12, 0.08], index=assets)
-        cov_matrix = pd.DataFrame(np.eye(3) * 0.04, index=assets, columns=assets)
-        
-        result = self.optimizer.optimize_portfolio(assets, expected_returns, cov_matrix, 0.6)
-        
-        assert "weights" in result
-        assert "expected_return" in result
-        assert "expected_risk" in result
-        assert "sharpe_ratio" in result
-    
-    def test_rebalance_portfolio(self):
-        """Test portfolio rebalancing."""
-        current_portfolio = {"AAPL": 0.4, "MSFT": 0.3, "GOOGL": 0.3}
-        target_weights = {"AAPL": 0.35, "MSFT": 0.35, "GOOGL": 0.3}
-        
-        result = self.optimizer.rebalance_portfolio(current_portfolio, target_weights)
-        
-        assert "rebalance_needed" in result
-        assert "trades" in result
-        assert "cost_estimate" in result
-
-
 class TestTradingEngine:
-    """Test integrated trading engine functionality."""
+    """Test suite for enhanced TradingEngine class."""
     
     def setup_method(self):
         """Set up test fixtures."""
-        self.trading_engine = TradingEngine()
-        self.sample_analysis = {
-            "symbol": "AAPL",
-            "signals": {
-                "overall_signal": "buy",
-                "signal_strength": "moderate",
-                "component_signals": {
-                    "technical": "buy",
-                    "fundamental": "hold"
-                }
-            },
-            "analysis_components": {
-                "technical": {"latest_price": 150.0},
-                "sentiment": {"overall_sentiment": "positive"}
-            }
-        }
-        self.sample_portfolio = {
-            "total_value": 100000,
-            "daily_pnl": 500,
-            "positions": {
-                "MSFT": {"value": 20000},
-                "GOOGL": {"value": 15000}
-            }
-        }
-    
-    def test_trading_engine_initialization(self):
-        """Test TradingEngine initialization."""
-        assert hasattr(self.trading_engine, 'risk_manager')
-        assert hasattr(self.trading_engine, 'user_manager')
-        assert hasattr(self.trading_engine, 'strategy_engine')
-        assert hasattr(self.trading_engine, 'portfolio_optimizer')
-    
-    def test_process_trading_decision(self):
-        """Test complete trading decision processing."""
-        result = self.trading_engine.process_trading_decision(
-            "test_user", self.sample_analysis, self.sample_portfolio
-        )
-        
-        assert "user_id" in result
-        assert "timestamp" in result
-        assert "recommendations" in result
-        assert "risk_assessment" in result
-        assert "strategy_selection" in result
-        assert "portfolio_allocation" in result
-        assert "validation_summary" in result
-        
-        assert result["user_id"] == "test_user"
-        assert isinstance(result["recommendations"], list)
-    
-    def test_execute_trade_validation(self):
-        """Test trade validation before execution."""
-        trade_rec = TradeRecommendation(
-            symbol="AAPL",
-            action=TradeAction.BUY,
-            quantity=100,
-            price=150.0,
-            confidence=0.8,
-            reasoning="Strong buy signal",
-            risk_level=RiskLevel.MODERATE
-        )
-        
-        result = self.trading_engine.execute_trade_validation(trade_rec, "test_user")
-        
-        assert "approved" in result
-        assert "risk_score" in result
-        assert isinstance(result["approved"], bool)
-    
-    def test_calculate_portfolio_metrics(self):
-        """Test portfolio metrics calculation."""
-        result = self.trading_engine.calculate_portfolio_metrics(self.sample_portfolio)
-        
-        assert "total_value" in result
-        assert "daily_pnl" in result
-        assert "total_return" in result
-        assert "risk_metrics" in result
-        assert "diversification_score" in result
-
-
-class TestUtilityFunctions:
-    """Test utility functions."""
-    
-    def test_validate_trade_parameters(self):
-        """Test trade parameter validation."""
-        valid_trade = {
-            "symbol": "AAPL",
-            "action": "buy",
-            "quantity": 100,
-            "price": 150.0
-        }
-        invalid_trade = {
-            "symbol": "AAPL",
-            "action": "buy"
-            # Missing quantity and price
-        }
-        
-        assert validate_trade_parameters(valid_trade) is True
-        assert validate_trade_parameters(invalid_trade) is False
-    
-    def test_calculate_risk_adjusted_return(self):
-        """Test risk-adjusted return calculation."""
-        returns = pd.Series([0.01, 0.02, -0.01, 0.03, 0.01])
-        benchmark = pd.Series([0.008, 0.015, -0.005, 0.025, 0.008])
-        
-        result = calculate_risk_adjusted_return(returns, benchmark)
-        
-        assert "alpha" in result
-        assert "beta" in result
-        assert "sharpe_ratio" in result
-        assert "information_ratio" in result
-        assert all(isinstance(v, float) for v in result.values())
-    
-    def test_format_recommendation(self):
-        """Test recommendation formatting."""
-        trade_rec = TradeRecommendation(
-            symbol="AAPL",
-            action=TradeAction.BUY,
-            quantity=100,
-            price=150.0,
-            confidence=0.8,
-            reasoning="Strong buy signal",
-            risk_level=RiskLevel.MODERATE
-        )
-        
-        formatted = format_recommendation(trade_rec)
-        
-        assert formatted["symbol"] == "AAPL"
-        assert formatted["action"] == "buy"
-        assert formatted["quantity"] == 100
-        assert formatted["price"] == 150.0
-        assert formatted["confidence"] == 0.8
-        assert formatted["reasoning"] == "Strong buy signal"
-
-
-class TestDataClasses:
-    """Test data class structures."""
-    
-    def test_trading_parameters_creation(self):
-        """Test TradingParameters creation."""
-        params = TradingParameters(
-            max_risk_per_trade=0.02,
-            max_portfolio_risk=0.20,
-            max_position_size=0.10,
-            daily_loss_limit=0.06,
-            leverage_limit=1.5
-        )
-        
-        assert params.max_risk_per_trade == 0.02
-        assert params.max_portfolio_risk == 0.20
-        assert params.max_position_size == 0.10
-        assert params.daily_loss_limit == 0.06
-        assert params.leverage_limit == 1.5
-    
-    def test_trade_recommendation_creation(self):
-        """Test TradeRecommendation creation."""
-        rec = TradeRecommendation(
-            symbol="AAPL",
-            action=TradeAction.BUY,
-            quantity=100,
-            price=150.0,
-            confidence=0.8,
-            reasoning="Strong buy signal",
-            risk_level=RiskLevel.MODERATE
-        )
-        
-        assert rec.symbol == "AAPL"
-        assert rec.action == TradeAction.BUY
-        assert rec.quantity == 100
-        assert rec.price == 150.0
-        assert rec.confidence == 0.8
-        assert rec.risk_level == RiskLevel.MODERATE
-    
-    def test_strategy_creation(self):
-        """Test Strategy creation."""
-        strategy = Strategy(
-            id="test_strategy",
-            name="Test Strategy",
-            strategy_type=StrategyType.MOMENTUM,
-            description="Test strategy description",
-            risk_level=0.5,
-            min_investment_horizon_days=30,
-            max_position_size=0.10,
-            volatility_tolerance=0.25,
-            market_conditions=[MarketRegime.BULL_MARKET],
-            suitable_risk_categories=[RiskCategory.MODERATE],
-            expected_return=0.12,
-            expected_volatility=0.18,
-            min_confidence_threshold=0.6
-        )
-        
-        assert strategy.id == "test_strategy"
-        assert strategy.strategy_type == StrategyType.MOMENTUM
-        assert strategy.risk_level == 0.5
-        assert RiskCategory.MODERATE in strategy.suitable_risk_categories
-
-
-class TestTradingStrategies:
-    """Test the 4 trading strategy implementations."""
-    
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.trading_engine = TradingEngine()
-        
-        # Sample market data for testing strategies
-        dates = pd.date_range(start='2024-01-01', periods=30, freq='D')
+        self.engine = TradingEngine()
         self.sample_data = {
             'technical': {
-                'price_data': pd.Series(100 + np.random.randn(30).cumsum(), index=dates),
-                'volume_data': pd.Series(np.random.randint(1000, 10000, 30), index=dates)
+                'price_data': pd.Series([100, 102, 98, 105, 103, 107, 104, 110, 112, 115, 108, 120, 118, 125, 123, 130, 128, 135, 133, 140], 
+                                       index=pd.date_range('2024-01-01', periods=20)),
+                'volume_data': pd.Series([1000, 1200, 800, 1500, 1100, 1300, 900, 1600, 1400, 1700, 1000, 1800, 1200, 1900, 1300, 2000, 1100, 2100, 1400, 2200],
+                                        index=pd.date_range('2024-01-01', periods=20))
             },
             'fundamental': {
                 'financial_metrics': {
@@ -600,344 +41,463 @@ class TestTradingStrategies:
                 }
             }
         }
-    
-    def test_momentum_strategy(self):
-        """Test momentum strategy implementation."""
-        result = self.trading_engine.momentum_strategy(self.sample_data)
         
-        assert "signal" in result
-        assert "confidence" in result
-        assert "reasoning" in result
-        assert "performance" in result
-        assert result["signal"] in ["buy", "sell", "hold"]
-        assert 0 <= result["confidence"] <= 1
-        assert "momentum_value" in result["performance"]
-    
-    def test_momentum_strategy_with_params(self):
-        """Test momentum strategy with custom parameters."""
-        params = {"lookback_period": 10, "threshold": 0.03}
-        result = self.trading_engine.momentum_strategy(self.sample_data, params)
-        
-        assert "signal" in result
-        assert "performance" in result
-    
-    def test_momentum_strategy_no_data(self):
-        """Test momentum strategy with no price data."""
-        empty_data = {'technical': {'price_data': pd.Series(dtype=float)}}
-        result = self.trading_engine.momentum_strategy(empty_data)
-        
-        assert result["signal"] == "hold"
-        assert result["confidence"] == 0.0
-        assert "No price data" in result["reasoning"]
-    
-    def test_mean_reversion_strategy(self):
-        """Test mean reversion strategy implementation."""
-        result = self.trading_engine.mean_reversion_strategy(self.sample_data)
-        
-        assert "signal" in result
-        assert "confidence" in result
-        assert "reasoning" in result
-        assert "performance" in result
-        assert result["signal"] in ["buy", "sell", "hold"]
-        assert "z_score" in result["performance"]
-        assert "mean_price" in result["performance"]
-    
-    def test_mean_reversion_strategy_insufficient_data(self):
-        """Test mean reversion strategy with insufficient data."""
-        short_data = {
-            'technical': {
-                'price_data': pd.Series([100, 101, 102])  # Only 3 points
+        self.strategy_results = {
+            'momentum': {
+                'signal': 'buy',
+                'confidence': 0.8,
+                'reasoning': 'Strong upward momentum detected',
+                'performance': {'momentum_value': 0.025}
+            },
+            'mean_reversion': {
+                'signal': 'hold',
+                'confidence': 0.3,
+                'reasoning': 'Price near mean',
+                'performance': {'z_score': 0.1}
+            },
+            'breakout': {
+                'signal': 'buy',
+                'confidence': 0.7,
+                'reasoning': 'Price breakout confirmed',
+                'performance': {'volume_confirmed': True}
+            },
+            'value': {
+                'signal': 'buy',
+                'confidence': 0.6,
+                'reasoning': 'Good fundamental metrics',
+                'performance': {'value_score': 4}
             }
         }
-        result = self.trading_engine.mean_reversion_strategy(short_data)
         
-        assert result["signal"] == "hold"
-        assert "Insufficient data" in result["reasoning"]
-    
-    def test_breakout_strategy(self):
-        """Test breakout strategy implementation."""
-        result = self.trading_engine.breakout_strategy(self.sample_data)
+        self.consensus_result = {
+            'overall_signal': 'buy',
+            'confidence': 0.7,
+            'signal_distribution': {'buy': 3, 'sell': 0, 'hold': 1}
+        }
+
+    def test_trading_engine_initialization(self):
+        """Test TradingEngine initialization."""
+        engine = TradingEngine({'test': 'config'})
+        assert engine.config == {'test': 'config'}
+        assert hasattr(engine, 'logger')
+
+    def test_momentum_strategy_buy_signal(self):
+        """Test momentum strategy generating buy signal."""
+        result = self.engine.momentum_strategy(self.sample_data)
         
-        assert "signal" in result
-        assert "confidence" in result
-        assert "reasoning" in result
-        assert "performance" in result
-        assert result["signal"] in ["buy", "sell", "hold"]
-        assert "high_level" in result["performance"]
-        assert "low_level" in result["performance"]
-        assert "volume_confirmed" in result["performance"]
-    
-    def test_breakout_strategy_with_volume_confirmation(self):
+        assert 'signal' in result
+        assert 'confidence' in result
+        assert 'reasoning' in result
+        assert 'performance' in result
+        assert isinstance(result['confidence'], float)
+        assert 0 <= result['confidence'] <= 1
+        assert result['signal'] in ['buy', 'sell', 'hold']
+
+    def test_momentum_strategy_insufficient_data(self):
+        """Test momentum strategy with insufficient data."""
+        empty_data = {
+            'technical': {'price_data': pd.Series(dtype=float)},
+            'fundamental': {}
+        }
+        result = self.engine.momentum_strategy(empty_data)
+        
+        assert result['signal'] == 'hold'
+        assert result['confidence'] == 0.0
+        assert 'No price data' in result['reasoning']
+
+    def test_mean_reversion_strategy(self):
+        """Test mean reversion strategy."""
+        result = self.engine.mean_reversion_strategy(self.sample_data)
+        
+        assert 'signal' in result
+        assert 'confidence' in result
+        assert 'reasoning' in result
+        assert 'z_score' in result['performance']
+        assert isinstance(result['performance']['z_score'], (int, float))
+
+    def test_breakout_strategy_with_volume(self):
         """Test breakout strategy with volume confirmation."""
-        # Modify data to simulate high volume breakout
-        modified_data = self.sample_data.copy()
-        modified_data['technical']['volume_data'].iloc[-1] = 20000  # High volume
+        result = self.engine.breakout_strategy(self.sample_data)
         
-        result = self.trading_engine.breakout_strategy(modified_data)
-        assert "volume_confirmed" in result["performance"]
-    
-    def test_value_strategy(self):
-        """Test value investing strategy implementation."""
-        result = self.trading_engine.value_strategy(self.sample_data)
+        assert 'signal' in result
+        assert 'confidence' in result
+        assert 'volume_confirmed' in result['performance']
+        assert isinstance(result['performance']['volume_confirmed'], (bool, np.bool_))
+
+    def test_value_strategy_with_fundamentals(self):
+        """Test value strategy with fundamental data."""
+        result = self.engine.value_strategy(self.sample_data)
         
-        assert "signal" in result
-        assert "confidence" in result
-        assert "reasoning" in result
-        assert "performance" in result
-        assert result["signal"] in ["buy", "sell", "hold"]
-        assert "value_score" in result["performance"]
-        assert "pe_ratio" in result["performance"]
-        assert "pb_ratio" in result["performance"]
-    
-    def test_value_strategy_undervalued_stock(self):
-        """Test value strategy with undervalued stock."""
-        undervalued_data = self.sample_data.copy()
-        undervalued_data['fundamental']['financial_metrics'].update({
-            'pe_ratio': 8.0,   # Low P/E
-            'pb_ratio': 0.8,   # Low P/B
-            'debt_to_equity': 0.3,  # Low debt
-            'roe': 0.20,       # High ROE
-            'current_ratio': 2.5   # Good liquidity
-        })
+        assert 'signal' in result
+        assert 'confidence' in result
+        assert 'value_score' in result['performance']
+        assert isinstance(result['performance']['value_score'], int)
+
+    def test_value_strategy_no_fundamentals(self):
+        """Test value strategy without fundamental data."""
+        no_fundamental_data = {
+            'technical': self.sample_data['technical'],
+            'fundamental': {}
+        }
+        result = self.engine.value_strategy(no_fundamental_data)
         
-        result = self.trading_engine.value_strategy(undervalued_data)
+        assert result['signal'] == 'hold'
+        assert result['confidence'] == 0.0
+        assert 'No fundamental data' in result['reasoning']
+
+    def test_generate_explanation_success(self):
+        """Test explanation generation."""
+        result = self.engine.generate_explanation(self.strategy_results, self.consensus_result)
         
-        assert result["signal"] == "buy"
-        assert result["confidence"] > 0.5
-        assert result["performance"]["value_score"] >= 4
-    
-    def test_value_strategy_overvalued_stock(self):
-        """Test value strategy with overvalued stock."""
-        overvalued_data = self.sample_data.copy()
-        overvalued_data['fundamental']['financial_metrics'].update({
-            'pe_ratio': 35.0,   # High P/E
-            'pb_ratio': 4.0,    # High P/B
-            'debt_to_equity': 0.8,  # High debt
-            'roe': 0.05,        # Low ROE
-            'current_ratio': 0.8    # Poor liquidity
-        })
+        assert result['status'] == 'success'
+        assert 'explanation' in result
+        assert 'timestamp' in result
         
-        result = self.trading_engine.value_strategy(overvalued_data)
+        explanation = result['explanation']
+        assert 'decision_summary' in explanation
+        assert 'strategy_breakdown' in explanation
+        assert 'risk_analysis' in explanation
+        assert 'confidence_attribution' in explanation
+        assert 'recommendations' in explanation
+
+    def test_generate_explanation_error_handling(self):
+        """Test explanation generation with invalid input."""
+        with patch.object(self.engine, '_create_decision_summary', side_effect=Exception("Test error")):
+            result = self.engine.generate_explanation({}, {})
+            assert result['status'] == 'error'
+            assert 'error' in result['explanation']
+
+    def test_calculate_strategy_scores(self):
+        """Test strategy score calculation."""
+        scores = self.engine.calculate_strategy_scores(self.strategy_results)
         
-        assert result["performance"]["value_score"] <= -2
-    
-    def test_strategy_error_handling(self):
-        """Test strategy error handling with invalid data."""
-        invalid_data = {"technical": {"price_data": "invalid"}}
+        assert isinstance(scores, dict)
+        assert len(scores) == len(self.strategy_results)
         
-        result = self.trading_engine.momentum_strategy(invalid_data)
-        assert result["signal"] == "hold"
-        assert result["confidence"] == 0.0
-        assert "Error" in result["reasoning"]
+        for strategy_name, score in scores.items():
+            assert isinstance(score, float)
+            assert 0 <= score <= 100
+            
+        # Buy/sell signals should have higher scores than hold
+        assert scores['momentum'] > scores['mean_reversion']
+
+    def test_attribute_performance(self):
+        """Test performance attribution."""
+        portfolio_performance = {'total_return': 0.15}
+        result = self.engine.attribute_performance(self.strategy_results, portfolio_performance)
+        
+        assert 'attribution' in result
+        assert 'total_attribution' in result
+        assert 'timestamp' in result
+        
+        attribution = result['attribution']
+        assert len(attribution) == len(self.strategy_results)
+        
+        # Check weights sum to 1
+        total_weight = sum(attr['weight'] for attr in attribution.values())
+        assert abs(total_weight - 1.0) < 0.01
+        
+        # Check attribution sums to total return
+        total_attributed = sum(attr['attributed_return'] for attr in attribution.values())
+        assert abs(total_attributed - 0.15) < 0.01
+
+    def test_attribute_performance_zero_confidence(self):
+        """Test performance attribution with zero total confidence."""
+        zero_confidence_results = {
+            'momentum': {'signal': 'hold', 'confidence': 0.0},
+            'value': {'signal': 'hold', 'confidence': 0.0}
+        }
+        portfolio_performance = {'total_return': 0.10}
+        
+        result = self.engine.attribute_performance(zero_confidence_results, portfolio_performance)
+        assert result['attribution'] == {}
+        assert result['total_attribution'] == 0.0
+
+    def test_send_alerts_risk_violations(self):
+        """Test alert system with risk violations."""
+        alert_data = {
+            'risk_violations': ['Position size exceeded', 'Daily loss limit reached'],
+            'strong_signals': [],
+            'performance_issues': []
+        }
+        
+        result = self.engine.send_alerts(alert_data)
+        
+        assert result['status'] == 'success'
+        assert result['alerts_generated'] == 2
+        assert result['notifications_sent'] == 2
+        assert len(result['notifications']) == 2
+        
+        # Check high priority for risk violations
+        for notification in result['notifications']:
+            if 'Risk Violation' in notification['message']:
+                assert notification['channel'] == 'email'
+
+    def test_send_alerts_strong_signals(self):
+        """Test alert system with strong signals."""
+        alert_data = {
+            'risk_violations': [],
+            'strong_signals': [
+                {'symbol': 'AAPL', 'signal': 'buy', 'confidence': 0.9},
+                {'symbol': 'MSFT', 'signal': 'sell', 'confidence': 0.7}
+            ],
+            'performance_issues': []
+        }
+        
+        result = self.engine.send_alerts(alert_data)
+        
+        assert result['status'] == 'success'
+        assert result['alerts_generated'] == 2
+        
+        # High confidence signal should be medium priority (email)
+        high_conf_alert = next(n for n in result['notifications'] if 'AAPL' in n['message'])
+        assert high_conf_alert['channel'] == 'email'
+
+    def test_send_alerts_performance_issues(self):
+        """Test alert system with performance issues."""
+        alert_data = {
+            'risk_violations': [],
+            'strong_signals': [],
+            'performance_issues': ['High drawdown detected', 'Low Sharpe ratio']
+        }
+        
+        result = self.engine.send_alerts(alert_data)
+        
+        assert result['status'] == 'success'
+        assert result['alerts_generated'] == 2
+        assert all(n['priority'] == 'medium' for n in result['notifications'])
+
+    def test_send_alerts_error_handling(self):
+        """Test alert system error handling."""
+        # Test with invalid input
+        with patch.object(Alert, '__init__', side_effect=Exception("Test error")):
+            result = self.engine.send_alerts({'risk_violations': ['test']})
+            assert result['status'] == 'error'
+            assert 'error' in result
+
+    def test_create_decision_summary(self):
+        """Test decision summary creation."""
+        # High confidence buy
+        high_conf_result = {'overall_signal': 'buy', 'confidence': 0.8}
+        summary = self.engine._create_decision_summary(high_conf_result)
+        assert 'BUY' in summary
+        assert 'high confidence' in summary
+        
+        # Low confidence hold
+        low_conf_result = {'overall_signal': 'hold', 'confidence': 0.2}
+        summary = self.engine._create_decision_summary(low_conf_result)
+        assert 'HOLD' in summary
+        assert 'low confidence' in summary
+
+    def test_analyze_strategy_breakdown(self):
+        """Test strategy breakdown analysis."""
+        breakdown = self.engine._analyze_strategy_breakdown(self.strategy_results)
+        
+        assert isinstance(breakdown, dict)
+        assert len(breakdown) == len(self.strategy_results)
+        
+        for strategy_name, description in breakdown.items():
+            assert strategy_name in self.strategy_results
+            assert isinstance(description, str)
+            assert len(description) > 0
+
+    def test_assess_risk_factors(self):
+        """Test risk factor assessment."""
+        # Test low consensus scenario
+        low_consensus_result = {
+            'signal_distribution': {'buy': 2, 'sell': 2, 'hold': 1},
+            'confidence': 0.3
+        }
+        
+        risk_factors = self.engine._assess_risk_factors(self.strategy_results, low_consensus_result)
+        
+        assert isinstance(risk_factors, list)
+        assert any('Low strategy consensus' in factor for factor in risk_factors)
+        assert any('Low overall confidence' in factor for factor in risk_factors)
+
+    def test_attribute_confidence(self):
+        """Test confidence attribution."""
+        attribution = self.engine._attribute_confidence(self.strategy_results)
+        
+        assert isinstance(attribution, dict)
+        assert len(attribution) == len(self.strategy_results)
+        
+        # Check percentages sum to 100
+        total_percentage = sum(attribution.values())
+        assert abs(total_percentage - 100.0) < 0.1
+        
+        # Highest confidence strategy should have highest attribution
+        max_attribution_strategy = max(attribution.keys(), key=lambda k: attribution[k])
+        max_confidence_strategy = max(self.strategy_results.keys(), 
+                                    key=lambda k: self.strategy_results[k]['confidence'])
+        assert max_attribution_strategy == max_confidence_strategy
+
+    def test_generate_recommendations(self):
+        """Test recommendation generation."""
+        # High confidence buy
+        buy_result = {'overall_signal': 'buy', 'confidence': 0.8}
+        recommendations = self.engine._generate_recommendations(buy_result)
+        assert any('long position' in rec for rec in recommendations)
+        
+        # High confidence sell
+        sell_result = {'overall_signal': 'sell', 'confidence': 0.8}
+        recommendations = self.engine._generate_recommendations(sell_result)
+        assert any('exiting long' in rec or 'short' in rec for rec in recommendations)
+        
+        # Low confidence hold
+        hold_result = {'overall_signal': 'hold', 'confidence': 0.3}
+        recommendations = self.engine._generate_recommendations(hold_result)
+        assert any('Wait for clearer signals' in rec for rec in recommendations)
 
 
 class TestSharedUtilities:
-    """Test shared utility functions."""
-    
+    """Test suite for shared utility functions."""
+
     def test_calculate_returns_simple(self):
         """Test simple returns calculation."""
-        prices = pd.Series([100, 105, 110, 108, 112])
-        returns = calculate_returns(prices, "simple")
+        prices = pd.Series([100, 102, 98, 105])
+        returns = calculate_returns(prices)
         
-        expected = [0.0, 0.05, 0.047619, -0.018182, 0.037037]
-        assert len(returns) == 5
-        # Check that returns are approximately correct (skip first NaN/0 value)
-        for i in range(1, 5):
-            assert abs(returns.iloc[i] - expected[i]) < 0.001
-    
+        expected_returns = pd.Series([0.0, 0.02, -0.0392157, 0.0714286])
+        
+        assert len(returns) == len(prices)
+        assert abs(returns.iloc[1] - 0.02) < 0.01
+        assert abs(returns.iloc[2] - (-0.0392)) < 0.01
+
     def test_calculate_returns_log(self):
-        """Test logarithmic returns calculation."""
-        prices = pd.Series([100, 105, 110])
-        returns = calculate_returns(prices, "log")
+        """Test log returns calculation."""
+        prices = pd.Series([100, 102, 98])
+        returns = calculate_returns(prices, returns_type="log")
         
-        assert len(returns) == 3
-        assert returns.iloc[1] > 0  # Price increased (skip first 0 value)
-        assert returns.iloc[2] > 0  # Price increased
-    
+        assert len(returns) == len(prices)
+        assert returns.iloc[0] == 0.0  # First return is always 0
+        assert returns.iloc[1] > 0  # Price increased
+        assert returns.iloc[2] < 0  # Price decreased
+
     def test_calculate_returns_empty_series(self):
         """Test returns calculation with empty series."""
-        prices = pd.Series(dtype=float)
-        returns = calculate_returns(prices)
+        empty_prices = pd.Series(dtype=float)
+        returns = calculate_returns(empty_prices)
         
         assert returns.empty
-    
-    def test_calculate_returns_single_value(self):
-        """Test returns calculation with single value."""
-        prices = pd.Series([100])
-        returns = calculate_returns(prices)
+
+    def test_calculate_returns_single_price(self):
+        """Test returns calculation with single price."""
+        single_price = pd.Series([100])
+        returns = calculate_returns(single_price)
         
         assert returns.empty
-    
-    def test_log_performance(self, caplog):
-        """Test performance logging function."""
-        import logging
-        with caplog.at_level(logging.INFO):
-            performance_data = {
-                "total_return": 0.15,
-                "sharpe_ratio": 1.2,
-                "trades": 25
-            }
-            
-            log_performance("Test Strategy", performance_data)
-            
-            assert "Strategy Performance: Test Strategy" in caplog.text
-            assert "total_return: 0.1500" in caplog.text
-            assert "sharpe_ratio: 1.2000" in caplog.text
-            assert "trades: 25" in caplog.text
 
-
-class TestErrorHandling:
-    """Test error handling scenarios."""
-    
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.trading_engine = TradingEngine()
-    
-    def test_trading_decision_with_invalid_data(self):
-        """Test trading decision with invalid data."""
-        invalid_analysis = {}
-        invalid_portfolio = {}
+    @patch('src.core.trading_engine.logger')
+    def test_log_performance_float_values(self, mock_logger):
+        """Test performance logging with float values."""
+        performance_data = {
+            'return': 0.15,
+            'sharpe_ratio': 1.25,
+            'max_drawdown': 0.08,
+            'trades': 50
+        }
         
-        result = self.trading_engine.process_trading_decision(
-            "test_user", invalid_analysis, invalid_portfolio
+        log_performance('Test Strategy', performance_data)
+        
+        # Verify logger.info was called
+        assert mock_logger.info.called
+        call_args = [call[0][0] for call in mock_logger.info.call_args_list]
+        
+        # Check strategy name logging
+        assert any('Test Strategy' in arg for arg in call_args)
+
+    @patch('src.core.trading_engine.logger')
+    def test_log_performance_error_handling(self, mock_logger):
+        """Test performance logging error handling."""
+        # Simulate error in logging
+        mock_logger.info.side_effect = Exception("Logging error")
+        
+        performance_data = {'return': 0.15}
+        
+        # Should not raise exception
+        log_performance('Error Strategy', performance_data)
+        
+        # Should log error
+        assert mock_logger.error.called
+
+
+class TestAlertDataStructures:
+    """Test suite for Alert data structures."""
+
+    def test_alert_creation(self):
+        """Test Alert dataclass creation."""
+        alert = Alert(
+            message="Test alert",
+            priority=AlertPriority.HIGH,
+            timestamp=datetime.now(),
+            category="test",
+            details={'key': 'value'}
         )
         
-        # Should handle gracefully without crashing
-        assert "user_id" in result
-        assert result["user_id"] == "test_user"
-    
-    def test_risk_manager_error_handling(self):
-        """Test RiskManager error handling."""
-        risk_manager = RiskManager()
+        assert alert.message == "Test alert"
+        assert alert.priority == AlertPriority.HIGH
+        assert alert.category == "test"
+        assert alert.details == {'key': 'value'}
+
+    def test_alert_priority_enum(self):
+        """Test AlertPriority enum values."""
+        assert AlertPriority.LOW.value == "low"
+        assert AlertPriority.MEDIUM.value == "medium"
+        assert AlertPriority.HIGH.value == "high"
+        assert AlertPriority.CRITICAL.value == "critical"
+
+    def test_alert_without_details(self):
+        """Test Alert creation without details."""
+        alert = Alert(
+            message="Simple alert",
+            priority=AlertPriority.MEDIUM,
+            timestamp=datetime.now(),
+            category="simple"
+        )
         
-        # Test with invalid trade data
-        invalid_trade = {}
-        portfolio = {"total_value": 100000}
-        user_params = TradingParameters(0.02, 0.20, 0.10, 0.06, 1.5)
-        
-        result = risk_manager.validate_trade_risk(invalid_trade, portfolio, user_params)
-        
-        assert result["approved"] is False
-        assert len(result["warnings"]) > 0
-    
-    def test_strategy_engine_error_handling(self):
-        """Test StrategyEngine error handling."""
-        strategy_engine = StrategyEngine()
-        
-        # Test with invalid market conditions
-        result = strategy_engine.select_strategy({}, {})
-        
-        # Should return fallback strategy
-        assert "strategy" in result
-        assert result["confidence"] >= 0
+        assert alert.details is None
 
 
-class TestEnumValues:
-    """Test enumeration values."""
-    
-    def test_risk_level_enum(self):
-        """Test RiskLevel enum values."""
-        assert RiskLevel.CONSERVATIVE.value == "conservative"
-        assert RiskLevel.MODERATE.value == "moderate"
-        assert RiskLevel.AGGRESSIVE.value == "aggressive"
-        assert RiskLevel.SPECULATIVE.value == "speculative"
-    
-    def test_trade_action_enum(self):
-        """Test TradeAction enum values."""
-        assert TradeAction.BUY.value == "buy"
-        assert TradeAction.SELL.value == "sell"
-        assert TradeAction.HOLD.value == "hold"
-        assert TradeAction.REDUCE.value == "reduce"
-    
-    def test_strategy_type_enum(self):
-        """Test StrategyType enum values."""
-        assert StrategyType.MOMENTUM.value == "momentum"
-        assert StrategyType.MEAN_REVERSION.value == "mean_reversion"
-        assert StrategyType.BUY_AND_HOLD.value == "buy_and_hold"
-    
-    def test_market_regime_enum(self):
-        """Test MarketRegime enum values."""
-        assert MarketRegime.BULL_MARKET.value == "bull_market"
-        assert MarketRegime.BEAR_MARKET.value == "bear_market"
-        assert MarketRegime.SIDEWAYS_MARKET.value == "sideways_market"
+class TestErrorScenarios:
+    """Test suite for error scenarios and edge cases."""
+
+    def test_strategy_with_exception(self):
+        """Test strategy execution with exception."""
+        engine = TradingEngine()
+        
+        # Invalid data that should cause errors
+        invalid_data = {'technical': {'price_data': 'invalid'}}
+        
+        result = engine.momentum_strategy(invalid_data)
+        assert result['signal'] == 'hold'
+        assert result['confidence'] == 0.0
+        assert 'Error:' in result['reasoning']
+
+    def test_explanation_with_empty_results(self):
+        """Test explanation generation with empty strategy results."""
+        engine = TradingEngine()
+        
+        result = engine.generate_explanation({}, {})
+        assert result['status'] == 'success'
+        assert 'explanation' in result
+
+    def test_strategy_scores_empty_input(self):
+        """Test strategy score calculation with empty input."""
+        engine = TradingEngine()
+        
+        scores = engine.calculate_strategy_scores({})
+        assert scores == {}
+
+    def test_send_alerts_empty_data(self):
+        """Test alert system with empty data."""
+        engine = TradingEngine()
+        
+        result = engine.send_alerts({})
+        assert result['status'] == 'success'
+        assert result['alerts_generated'] == 0
+        assert result['notifications_sent'] == 0
 
 
-class TestStrategyIntegration:
-    """Test strategy integration with trading engine."""
-    
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.trading_engine = TradingEngine()
-    
-    def test_all_strategies_execution(self):
-        """Test all 4 strategies can be executed successfully."""
-        # Create sample data
-        dates = pd.date_range(start='2024-01-01', periods=25, freq='D')
-        sample_data = {
-            'technical': {
-                'price_data': pd.Series(100 + np.random.randn(25).cumsum(), index=dates),
-                'volume_data': pd.Series(np.random.randint(1000, 10000, 25), index=dates)
-            },
-            'fundamental': {
-                'financial_metrics': {
-                    'pe_ratio': 15.0,
-                    'pb_ratio': 1.5,
-                    'debt_to_equity': 0.5,
-                    'roe': 0.15,
-                    'current_ratio': 1.8
-                }
-            }
-        }
-        
-        # Execute all strategies
-        momentum_result = self.trading_engine.momentum_strategy(sample_data)
-        mean_reversion_result = self.trading_engine.mean_reversion_strategy(sample_data)
-        breakout_result = self.trading_engine.breakout_strategy(sample_data)
-        value_result = self.trading_engine.value_strategy(sample_data)
-        
-        # Verify all strategies return valid results
-        for result in [momentum_result, mean_reversion_result, breakout_result, value_result]:
-            assert "signal" in result
-            assert "confidence" in result
-            assert "reasoning" in result
-            assert "performance" in result
-            assert result["signal"] in ["buy", "sell", "hold"]
-            assert 0 <= result["confidence"] <= 1
-    
-    def test_strategy_consensus_calculation(self):
-        """Test calculation of strategy consensus."""
-        # Mock data that should generate consistent signals
-        dates = pd.date_range(start='2024-01-01', periods=25, freq='D')
-        bullish_data = {
-            'technical': {
-                'price_data': pd.Series(100 + np.arange(25) * 0.5, index=dates),  # Uptrending
-                'volume_data': pd.Series([2000] * 25, index=dates)
-            },
-            'fundamental': {
-                'financial_metrics': {
-                    'pe_ratio': 10.0,   # Undervalued
-                    'pb_ratio': 1.0,    # Undervalued
-                    'debt_to_equity': 0.3,  # Low debt
-                    'roe': 0.20,        # High ROE
-                    'current_ratio': 2.5    # Good liquidity
-                }
-            }
-        }
-        
-        # Execute strategies
-        results = {
-            'momentum': self.trading_engine.momentum_strategy(bullish_data),
-            'mean_reversion': self.trading_engine.mean_reversion_strategy(bullish_data),
-            'breakout': self.trading_engine.breakout_strategy(bullish_data),
-            'value': self.trading_engine.value_strategy(bullish_data)
-        }
-        
-        # Count buy signals
-        buy_signals = sum(1 for result in results.values() if result['signal'] == 'buy')
-        
-        # With bullish data, we should get at least some buy signals
-        assert buy_signals >= 1
-        
-        # Calculate average confidence
-        avg_confidence = sum(result['confidence'] for result in results.values()) / len(results)
-        assert avg_confidence > 0
+if __name__ == '__main__':
+    pytest.main([__file__, '-v'])

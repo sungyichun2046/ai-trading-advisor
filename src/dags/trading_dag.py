@@ -203,6 +203,27 @@ def generate_trading_signals(**context) -> Dict[str, Any]:
             overall_signal = 'hold'
             confidence = 0.5
         
+        # Create consensus result for explanation
+        consensus_result = {
+            'overall_signal': overall_signal,
+            'confidence': confidence,
+            'signal_distribution': {
+                'buy': buy_signals,
+                'sell': sell_signals,
+                'hold': hold_signals
+            }
+        }
+        
+        # Generate detailed explanation if trading engine supports it
+        explanation_result = {}
+        if HAS_TRADING_ENGINE and hasattr(trading_engine, 'generate_explanation'):
+            explanation_result = trading_engine.generate_explanation(strategy_results, consensus_result)
+        
+        # Calculate strategy scores if trading engine supports it
+        strategy_scores = {}
+        if HAS_TRADING_ENGINE and hasattr(trading_engine, 'calculate_strategy_scores'):
+            strategy_scores = trading_engine.calculate_strategy_scores(strategy_results)
+        
         # Performance metrics
         performance = {
             'strategies_executed': len(strategy_results),
@@ -224,7 +245,9 @@ def generate_trading_signals(**context) -> Dict[str, Any]:
                 'sell': sell_signals, 
                 'hold': hold_signals
             },
-            'performance_metrics': performance
+            'performance_metrics': performance,
+            'explanation': explanation_result,
+            'strategy_scores': strategy_scores
         }
         
         context['task_instance'].xcom_push(key='trading_signals', value=processed_data)
@@ -439,55 +462,63 @@ def send_alerts(**context) -> Dict[str, Any]:
         
         alert_manager = AlertManager()
         
-        # Generate alerts based on results
-        alerts_to_send = []
+        # Prepare alert data for enhanced alert system
+        alert_data = {
+            'risk_violations': [],
+            'strong_signals': [],
+            'performance_issues': []
+        }
         
-        # Risk alerts
-        if risk_assessment and risk_assessment.get('portfolio_risk_assessment', {}).get('risk_violations'):
-            alerts_to_send.append({
-                'type': 'risk_violation',
-                'priority': 'high',
-                'message': f"Risk violations detected: {len(risk_assessment['portfolio_risk_assessment']['risk_violations'])}"
-            })
+        # Risk violations
+        if risk_assessment and risk_assessment.get('risk_metrics', {}).get('concentration_risk', 0) > 0.15:
+            alert_data['risk_violations'].append("High concentration risk detected")
         
-        # Trading alerts
-        if portfolio_management and portfolio_management.get('executed_trades'):
-            alerts_to_send.append({
-                'type': 'trades_executed',
-                'priority': 'medium',
-                'message': f"Portfolio rebalanced: {len(portfolio_management['executed_trades'])} trades executed"
-            })
+        # Strong signals
+        if trading_signals:
+            for strategy_name, result in trading_signals.get('strategy_results', {}).items():
+                if result.get('confidence', 0) > 0.8 and result.get('signal') in ['buy', 'sell']:
+                    alert_data['strong_signals'].append({
+                        'symbol': 'AAPL',  # Mock symbol
+                        'signal': result['signal'],
+                        'confidence': result['confidence'],
+                        'strategy': strategy_name
+                    })
         
-        # Signal alerts
-        if trading_signals and trading_signals.get('signal_summary', {}).get('high_confidence_signals', 0) > 2:
-            alerts_to_send.append({
-                'type': 'strong_signals',
-                'priority': 'medium',
-                'message': f"Strong trading signals detected for {trading_signals['signal_summary']['high_confidence_signals']} positions"
-            })
+        # Performance issues
+        if portfolio_management:
+            portfolio_turnover = portfolio_management.get('portfolio_management', {}).get('portfolio_turnover_pct', 0)
+            if portfolio_turnover > 0.5:  # High turnover
+                alert_data['performance_issues'].append(f"High portfolio turnover: {portfolio_turnover:.1%}")
         
-        # Send alerts (simulated)
-        notifications_sent = []
-        for alert in alerts_to_send:
-            notifications_sent.append({
-                'channel': 'email',
-                'recipient': 'trader@ai-trading-advisor.com',
-                'subject': f"Trading Alert: {alert['type']}",
-                'sent_at': datetime.now().isoformat()
-            })
+        # Use enhanced alert system if available
+        alert_result = {}
+        trading_engine = get_trading_engine()
+        if HAS_TRADING_ENGINE and hasattr(trading_engine, 'send_alerts'):
+            alert_result = trading_engine.send_alerts(alert_data)
+            notifications_sent = alert_result.get('notifications', [])
+        else:
+            # Fallback alert system
+            notifications_sent = []
+            for violation in alert_data['risk_violations']:
+                notifications_sent.append({
+                    'channel': 'email',
+                    'recipient': 'trader@ai-trading-advisor.com',
+                    'subject': 'Trading Alert: RISK',
+                    'sent_at': datetime.now().isoformat()
+                })
         
         processed_data = {
             'timestamp': datetime.now().isoformat(),
             'alert_summary': {
-                'total_alerts_generated': len(alerts_to_send),
-                'high_priority_alerts': len([a for a in alerts_to_send if a['priority'] == 'high']),
+                'total_alerts_generated': alert_result.get('alerts_generated', len(notifications_sent)),
                 'notifications_sent': len(notifications_sent),
-                'alert_types': [a['type'] for a in alerts_to_send]
+                'alert_system_status': alert_result.get('status', 'success')
             },
-            'alerts_generated': alerts_to_send,
+            'alert_data_processed': alert_data,
             'notifications_sent': notifications_sent,
+            'enhanced_alert_result': alert_result,
             'system_status': {
-                'all_systems_operational': len([a for a in alerts_to_send if a['priority'] == 'high']) == 0,
+                'all_systems_operational': len(alert_data['risk_violations']) == 0,
                 'trading_session_complete': True,
                 'next_analysis_scheduled': 'Next market session'
             }
