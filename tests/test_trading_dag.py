@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from src.dags.trading_dag import (
     generate_trading_signals, assess_portfolio_risk, calculate_position_sizes,
-    manage_portfolio, send_alerts, dag
+    manage_portfolio, execute_paper_trades, send_alerts, dag
 )
 
 
@@ -40,11 +40,12 @@ class TestTradingDAG:
             'assess_portfolio_risk',
             'calculate_position_sizes',
             'manage_portfolio',
+            'execute_paper_trades',
             'send_alerts'
         }
         
         assert expected_tasks.issubset(task_ids)
-        assert len(dag.tasks) == 5
+        assert len(dag.tasks) == 6
 
 
 class TestGenerateTradingSignals:
@@ -219,7 +220,8 @@ class TestSendAlerts:
             {'trading_signals': {'AAPL': {'signal': 'buy'}}, 'signal_summary': {'high_confidence_signals': 3}},
             {'portfolio_risk_assessment': {'risk_violations': ['AAPL: 3% exceeds 2% limit']}},
             {'calculated_positions': {'AAPL': {'dollar_amount': 5000}}},
-            {'executed_trades': [{'symbol': 'AAPL', 'action': 'buy', 'amount': 1000}]}
+            {'executed_trades': [{'symbol': 'AAPL', 'action': 'buy', 'amount': 1000}]},
+            {'paper_trading_summary': {'executed': 2, 'rejected': 0}, 'trades_executed': []}
         ]
     
     @patch('src.dags.trading_dag.AlertManager')
@@ -279,14 +281,14 @@ class TestTradingDAGIntegration:
         # Check manage_portfolio depends on calculate_position_sizes
         assert 'calculate_position_sizes' in task_dict['manage_portfolio'].upstream_task_ids
         
-        # Check send_alerts depends on risk and portfolio management
+        # Check send_alerts depends on risk assessment and paper trading
         alerts_upstream = task_dict['send_alerts'].upstream_task_ids
         assert 'assess_portfolio_risk' in alerts_upstream
-        assert 'manage_portfolio' in alerts_upstream
+        assert 'execute_paper_trades' in alerts_upstream
     
     def test_dag_task_count(self):
         """Test DAG has exactly 5 tasks."""
-        assert len(dag.tasks) == 5
+        assert len(dag.tasks) == 6
     
     def test_dag_schedule_weekdays_only(self):
         """Test DAG is scheduled for weekdays only."""

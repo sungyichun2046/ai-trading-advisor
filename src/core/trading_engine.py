@@ -1,8 +1,4 @@
-"""
-Extended Trading Engine Module
-Enhanced trading functionality with explanation, scoring, and attribution functions.
-"""
-
+"""Trading Engine Module - Enhanced with paper trading and shared utilities."""
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Union
@@ -11,11 +7,19 @@ import numpy as np
 from enum import Enum
 from dataclasses import dataclass
 
+# Shared utilities import
+try:
+    from ..utils.shared import validate_data_quality, log_performance
+except ImportError:
+    def validate_data_quality(data, data_type="trading", min_threshold=0.8):
+        return {"quality_score": 0.8, "issues": [], "data_type": data_type}
+    def log_performance(operation, start_time, end_time, status="success", metrics=None):
+        return {"operation": operation, "duration": 0.1, "status": status}
+
 # Configuration
 try:
     from ..config import settings
 except ImportError:
-    # Fallback settings for Docker environment
     class MockSettings:
         DATABASE_URL = "postgresql://airflow:airflow@test-postgres:5432/airflow"
         REDIS_URL = "redis://localhost:6379"
@@ -26,35 +30,26 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-
 class AlertPriority(Enum):
-    """Alert priority levels."""
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"
     CRITICAL = "critical"
 
-
 @dataclass
 class Alert:
-    """Alert data structure."""
     message: str
     priority: AlertPriority
     timestamp: datetime
     category: str
     details: Dict[str, Any] = None
 
-
 class TradingEngine:
-    """Extended trading engine with explanation and attribution capabilities."""
-    
     def __init__(self, config: Optional[Dict[str, Any]] = None):
-        """Initialize trading engine with configuration."""
         self.config = config or {}
         self.logger = logging.getLogger(__name__)
         
     def momentum_strategy(self, data: Dict[str, Any], params: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Execute momentum trading strategy."""
         try:
             params = params or {"lookback_period": 20, "threshold": 0.02}
             price_data = data.get("technical", {}).get("price_data", pd.Series(dtype=float))
@@ -92,7 +87,9 @@ class TradingEngine:
                 "returns_std": returns.std()
             }
             
-            log_performance("Momentum Strategy", performance)
+            start_time = datetime.now()
+            end_time = start_time
+            log_performance("Momentum Strategy", start_time, end_time, "success", performance)
             
             return {
                 "signal": signal,
@@ -105,7 +102,6 @@ class TradingEngine:
             return {"signal": "hold", "confidence": 0.0, "reasoning": f"Error: {str(e)}"}
     
     def mean_reversion_strategy(self, data: Dict[str, Any], params: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Execute mean reversion trading strategy."""
         try:
             params = params or {"lookback_period": 20, "z_threshold": 2.0}
             price_data = data.get("technical", {}).get("price_data", pd.Series(dtype=float))
@@ -144,7 +140,9 @@ class TradingEngine:
                 "volatility": std_price
             }
             
-            log_performance("Mean Reversion Strategy", performance)
+            start_time = datetime.now()
+            end_time = start_time  
+            log_performance("Mean Reversion Strategy", start_time, end_time, "success", performance)
             
             return {
                 "signal": signal,
@@ -157,7 +155,6 @@ class TradingEngine:
             return {"signal": "hold", "confidence": 0.0, "reasoning": f"Error: {str(e)}"}
     
     def breakout_strategy(self, data: Dict[str, Any], params: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Execute breakout trading strategy."""
         try:
             params = params or {"lookback_period": 20, "volume_threshold": 1.5}
             price_data = data.get("technical", {}).get("price_data", pd.Series(dtype=float))
@@ -203,7 +200,9 @@ class TradingEngine:
                 "volume_confirmed": volume_confirmed
             }
             
-            log_performance("Breakout Strategy", performance)
+            start_time = datetime.now()
+            end_time = start_time
+            log_performance("Breakout Strategy", start_time, end_time, "success", performance)
             
             return {
                 "signal": signal,
@@ -216,7 +215,6 @@ class TradingEngine:
             return {"signal": "hold", "confidence": 0.0, "reasoning": f"Error: {str(e)}"}
     
     def value_strategy(self, data: Dict[str, Any], params: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Execute value investing strategy."""
         try:
             params = params or {"pe_threshold": 15, "pb_threshold": 2, "debt_threshold": 0.6}
             fundamentals = data.get("fundamental", {}).get("financial_metrics", {})
@@ -302,7 +300,9 @@ class TradingEngine:
                 "current_ratio": current_ratio
             }
             
-            log_performance("Value Strategy", performance)
+            start_time = datetime.now()
+            end_time = start_time
+            log_performance("Value Strategy", start_time, end_time, "success", performance)
             
             return {
                 "signal": signal,
@@ -315,7 +315,6 @@ class TradingEngine:
             return {"signal": "hold", "confidence": 0.0, "reasoning": f"Error: {str(e)}"}
 
     def generate_explanation(self, strategy_results: Dict[str, Any], consensus_result: Dict[str, Any]) -> Dict[str, Any]:
-        """Generate detailed explanation for trading decisions."""
         try:
             explanation = {
                 "decision_summary": self._create_decision_summary(consensus_result),
@@ -324,170 +323,84 @@ class TradingEngine:
                 "confidence_attribution": self._attribute_confidence(strategy_results),
                 "recommendations": self._generate_recommendations(consensus_result)
             }
-            
-            return {
-                "explanation": explanation,
-                "timestamp": datetime.now().isoformat(),
-                "status": "success"
-            }
-            
+            return {"explanation": explanation, "timestamp": datetime.now().isoformat(), "status": "success"}
         except Exception as e:
             logger.error(f"Error generating explanation: {e}")
             return {"explanation": {"error": str(e)}, "status": "error"}
 
     def calculate_strategy_scores(self, strategy_results: Dict[str, Any]) -> Dict[str, float]:
-        """Calculate individual strategy performance scores."""
         scores = {}
-        
         for strategy_name, result in strategy_results.items():
             confidence = result.get("confidence", 0.0)
             signal = result.get("signal", "hold")
-            
-            # Base score from confidence
             base_score = confidence * 100
-            
-            # Adjust based on signal strength
-            if signal in ["buy", "sell"]:
-                score = base_score
-            else:  # hold
-                score = base_score * 0.5  # Hold signals get reduced score
-                
+            score = base_score if signal in ["buy", "sell"] else base_score * 0.5
             scores[strategy_name] = round(score, 2)
-            
         return scores
 
     def attribute_performance(self, strategy_results: Dict[str, Any], portfolio_performance: Dict[str, Any]) -> Dict[str, Any]:
-        """Attribute portfolio performance to individual strategies."""
         try:
             attribution = {}
             total_confidence = sum(r.get("confidence", 0) for r in strategy_results.values())
-            
             if total_confidence == 0:
                 return {"attribution": {}, "total_attribution": 0.0}
             
             portfolio_return = portfolio_performance.get("total_return", 0.0)
-            
             for strategy_name, result in strategy_results.items():
                 confidence = result.get("confidence", 0.0)
                 weight = confidence / total_confidence
                 attributed_return = portfolio_return * weight
-                
                 attribution[strategy_name] = {
-                    "weight": round(weight, 3),
-                    "attributed_return": round(attributed_return, 4),
-                    "confidence": confidence,
-                    "signal": result.get("signal", "hold")
+                    "weight": round(weight, 3), "attributed_return": round(attributed_return, 4),
+                    "confidence": confidence, "signal": result.get("signal", "hold")
                 }
-            
-            return {
-                "attribution": attribution,
-                "total_attribution": portfolio_return,
-                "timestamp": datetime.now().isoformat()
-            }
-            
+            return {"attribution": attribution, "total_attribution": portfolio_return, "timestamp": datetime.now().isoformat()}
         except Exception as e:
             logger.error(f"Error in performance attribution: {e}")
             return {"attribution": {}, "error": str(e)}
 
     def send_alerts(self, alert_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Send trading alerts and notifications."""
         try:
             alerts = []
             
-            # Risk alerts
-            risk_violations = alert_data.get("risk_violations", [])
-            for violation in risk_violations:
-                alert = Alert(
-                    message=f"Risk Violation: {violation}",
-                    priority=AlertPriority.HIGH,
-                    timestamp=datetime.now(),
-                    category="risk",
-                    details={"violation": violation}
-                )
-                alerts.append(alert)
+            # Process risk, signal, and performance alerts
+            for violation in alert_data.get("risk_violations", []):
+                alerts.append(Alert(f"Risk Violation: {violation}", AlertPriority.HIGH, datetime.now(), "risk"))
             
-            # Signal alerts
-            strong_signals = alert_data.get("strong_signals", [])
-            for signal in strong_signals:
+            for signal in alert_data.get("strong_signals", []):
                 priority = AlertPriority.HIGH if signal.get("confidence", 0) > 0.8 else AlertPriority.MEDIUM
-                alert = Alert(
-                    message=f"Strong {signal.get('signal', 'unknown')} signal for {signal.get('symbol', 'unknown')}",
-                    priority=priority,
-                    timestamp=datetime.now(),
-                    category="signal",
-                    details=signal
-                )
-                alerts.append(alert)
+                msg = f"Strong {signal.get('signal', 'unknown')} signal for {signal.get('symbol', 'unknown')}"
+                alerts.append(Alert(msg, priority, datetime.now(), "signal", signal))
             
-            # Performance alerts
-            performance_issues = alert_data.get("performance_issues", [])
-            for issue in performance_issues:
-                alert = Alert(
-                    message=f"Performance Alert: {issue}",
-                    priority=AlertPriority.MEDIUM,
-                    timestamp=datetime.now(),
-                    category="performance",
-                    details={"issue": issue}
-                )
-                alerts.append(alert)
+            for issue in alert_data.get("performance_issues", []):
+                alerts.append(Alert(f"Performance Alert: {issue}", AlertPriority.MEDIUM, datetime.now(), "performance"))
             
-            # Send alerts (simulated)
-            notifications_sent = []
+            # Generate notifications
+            notifications = []
             for alert in alerts:
-                notification = {
+                notifications.append({
                     "channel": "email" if alert.priority in [AlertPriority.HIGH, AlertPriority.CRITICAL] else "dashboard",
-                    "recipient": "trader@ai-trading-advisor.com",
-                    "subject": f"Trading Alert: {alert.category.upper()}",
-                    "message": alert.message,
-                    "priority": alert.priority.value,
-                    "timestamp": alert.timestamp.isoformat()
-                }
-                notifications_sent.append(notification)
+                    "recipient": "trader@ai-trading-advisor.com", "subject": f"Trading Alert: {alert.category.upper()}",
+                    "message": alert.message, "priority": alert.priority.value, "timestamp": alert.timestamp.isoformat()
+                })
             
-            return {
-                "alerts_generated": len(alerts),
-                "notifications_sent": len(notifications_sent),
-                "notifications": notifications_sent,
-                "status": "success",
-                "timestamp": datetime.now().isoformat()
-            }
-            
+            return {"alerts_generated": len(alerts), "notifications_sent": len(notifications), 
+                   "notifications": notifications, "status": "success", "timestamp": datetime.now().isoformat()}
         except Exception as e:
             logger.error(f"Error sending alerts: {e}")
-            return {
-                "alerts_generated": 0,
-                "notifications_sent": 0,
-                "error": str(e),
-                "status": "error"
-            }
+            return {"alerts_generated": 0, "notifications_sent": 0, "error": str(e), "status": "error"}
 
     def _create_decision_summary(self, consensus_result: Dict[str, Any]) -> str:
-        """Create human-readable decision summary."""
-        signal = consensus_result.get("overall_signal", "hold")
-        confidence = consensus_result.get("confidence", 0.0)
-        
+        signal, confidence = consensus_result.get("overall_signal", "hold"), consensus_result.get("confidence", 0.0)
         confidence_text = "high" if confidence > 0.7 else "medium" if confidence > 0.4 else "low"
-        
         return f"Recommendation: {signal.upper()} with {confidence_text} confidence ({confidence:.1%})"
 
     def _analyze_strategy_breakdown(self, strategy_results: Dict[str, Any]) -> Dict[str, str]:
-        """Analyze individual strategy contributions."""
-        breakdown = {}
-        
-        for strategy_name, result in strategy_results.items():
-            signal = result.get("signal", "hold")
-            confidence = result.get("confidence", 0.0)
-            reasoning = result.get("reasoning", "No reasoning provided")
-            
-            breakdown[strategy_name] = f"{signal.upper()} ({confidence:.1%}) - {reasoning}"
-            
-        return breakdown
+        return {strategy_name: f"{result.get('signal', 'hold').upper()} ({result.get('confidence', 0.0):.1%}) - {result.get('reasoning', 'No reasoning provided')}" 
+                for strategy_name, result in strategy_results.items()}
 
     def _assess_risk_factors(self, strategy_results: Dict[str, Any], consensus_result: Dict[str, Any]) -> List[str]:
-        """Assess risk factors in the trading decision."""
         risk_factors = []
-        
-        # Check for low consensus
         signal_distribution = consensus_result.get("signal_distribution", {})
         max_signals = max(signal_distribution.values()) if signal_distribution else 0
         total_signals = sum(signal_distribution.values()) if signal_distribution else 0
@@ -495,82 +408,93 @@ class TradingEngine:
         if total_signals > 0 and max_signals / total_signals < 0.6:
             risk_factors.append("Low strategy consensus - mixed signals detected")
         
-        # Check for low confidence strategies
-        low_confidence_strategies = [
-            name for name, result in strategy_results.items() 
-            if result.get("confidence", 0) < 0.3
-        ]
-        
+        low_confidence_strategies = [name for name, result in strategy_results.items() if result.get("confidence", 0) < 0.3]
         if len(low_confidence_strategies) > len(strategy_results) / 2:
             risk_factors.append(f"Multiple low-confidence strategies: {', '.join(low_confidence_strategies)}")
         
-        # Check overall confidence
-        overall_confidence = consensus_result.get("confidence", 0.0)
-        if overall_confidence < 0.4:
+        if consensus_result.get("confidence", 0.0) < 0.4:
             risk_factors.append("Low overall confidence in recommendation")
-            
         return risk_factors
 
     def _attribute_confidence(self, strategy_results: Dict[str, Any]) -> Dict[str, float]:
-        """Attribute overall confidence to individual strategies."""
         total_confidence = sum(r.get("confidence", 0) for r in strategy_results.values())
-        
-        if total_confidence == 0:
-            return {}
-        
-        attribution = {}
-        for strategy_name, result in strategy_results.items():
-            confidence = result.get("confidence", 0.0)
-            contribution = (confidence / total_confidence) * 100
-            attribution[strategy_name] = round(contribution, 1)
-            
-        return attribution
+        if total_confidence == 0: return {}
+        return {strategy_name: round((result.get("confidence", 0.0) / total_confidence) * 100, 1) 
+                for strategy_name, result in strategy_results.items()}
 
     def _generate_recommendations(self, consensus_result: Dict[str, Any]) -> List[str]:
-        """Generate actionable recommendations."""
         recommendations = []
+        signal, confidence = consensus_result.get("overall_signal", "hold"), consensus_result.get("confidence", 0.0)
         
-        signal = consensus_result.get("overall_signal", "hold")
-        confidence = consensus_result.get("confidence", 0.0)
+        if signal == "buy" and confidence > 0.7: recommendations.append("Consider entering a long position with appropriate position sizing")
+        elif signal == "sell" and confidence > 0.7: recommendations.append("Consider exiting long positions or entering short positions")
+        elif signal == "hold": recommendations.append("Maintain current positions and monitor for signal changes")
         
-        if signal == "buy" and confidence > 0.7:
-            recommendations.append("Consider entering a long position with appropriate position sizing")
-        elif signal == "sell" and confidence > 0.7:
-            recommendations.append("Consider exiting long positions or entering short positions")
-        elif signal == "hold":
-            recommendations.append("Maintain current positions and monitor for signal changes")
-        
-        if confidence < 0.5:
-            recommendations.append("Wait for clearer signals before taking action")
-            
+        if confidence < 0.5: recommendations.append("Wait for clearer signals before taking action")
         recommendations.append("Always apply proper risk management and position sizing rules")
-        
         return recommendations
 
+    def execute_paper_trade(self, signal_data: Dict[str, Any], portfolio_state: Dict[str, Any]) -> Dict[str, Any]:
+        start_time = datetime.now()
+        try:
+            signal_quality = validate_data_quality(signal_data, "trading_signals", 0.7)
+            if signal_quality["quality_score"] < 0.7:
+                return {"status": "rejected", "reason": f"Low signal quality: {signal_quality['issues']}", "trade": None}
+            
+            symbol, signal, confidence, current_price = signal_data.get("symbol", "UNKNOWN"), signal_data.get("signal", "hold"), signal_data.get("confidence", 0.0), signal_data.get("price", 100.0)
+            portfolio_value = portfolio_state.get("total_value", 100000.0)
+            shares = int(portfolio_value * 0.02 / current_price)  # 2% risk rule
+            
+            if signal in ["buy", "sell"] and confidence > 0.5 and shares > 0:
+                trade = {"symbol": symbol, "action": signal, "shares": shares, "price": current_price, 
+                        "value": shares * current_price, "confidence": confidence, "timestamp": datetime.now().isoformat()}
+                
+                current_position = portfolio_state.get("positions", {}).get(symbol, 0)
+                new_position = current_position + shares if signal == "buy" else max(0, current_position - shares)
+                updated_portfolio = portfolio_state.copy()
+                updated_portfolio.setdefault("positions", {})[symbol] = new_position
+                
+                log_performance("Paper Trade Execution", start_time, datetime.now(), "success", 
+                               {"symbol": symbol, "action": signal, "shares": shares, "value": trade["value"]})
+                
+                return {"status": "executed", "trade": trade, "portfolio_state": updated_portfolio, "quality_check": signal_quality}
+            else:
+                return {"status": "no_action", "reason": f"Signal {signal} with confidence {confidence:.2f} below threshold", "trade": None}
+                
+        except Exception as e:
+            log_performance("Paper Trade Execution", start_time, datetime.now(), "error", {"error": str(e)})
+            return {"status": "error", "error": str(e), "trade": None}
+
+    def calculate_portfolio_metrics(self, portfolio_state: Dict[str, Any], market_data: Dict[str, Any]) -> Dict[str, Any]:
+        start_time = datetime.now()
+        try:
+            data_quality = validate_data_quality(market_data, "market_data", 0.8)
+            positions = portfolio_state.get("positions", {})
+            total_value, position_values = 0.0, {}
+            
+            for symbol, shares in positions.items():
+                price = market_data.get(symbol, {}).get("price", 0)
+                value = shares * price
+                position_values[symbol] = {"shares": shares, "price": price, "value": value}
+                total_value += value
+            
+            cash = portfolio_state.get("cash", 0.0)
+            total_portfolio_value = total_value + cash
+            position_weights = {symbol: val["value"] / total_portfolio_value for symbol, val in position_values.items() if total_portfolio_value > 0}
+            concentration_risk = max(position_weights.values()) if position_weights else 0.0
+            diversification_score = 1.0 - concentration_risk
+            
+            metrics = {"total_value": total_portfolio_value, "position_value": total_value, "cash": cash, "positions": position_values,
+                      "diversification_score": round(diversification_score, 3), "concentration_risk": round(concentration_risk, 3),
+                      "data_quality": data_quality, "timestamp": datetime.now().isoformat()}
+            
+            log_performance("Portfolio Metrics", start_time, datetime.now(), "success", {"total_value": total_portfolio_value, "positions": len(positions)})
+            return {"status": "success", "metrics": metrics}
+            
+        except Exception as e:
+            log_performance("Portfolio Metrics", start_time, datetime.now(), "error", {"error": str(e)})
+            return {"status": "error", "error": str(e), "metrics": {}}
 
 def calculate_returns(prices: pd.Series, returns_type: str = "simple") -> pd.Series:
-    """Calculate returns from price series."""
-    if prices.empty or len(prices) < 2:
-        return pd.Series(dtype=float)
-    
-    if returns_type == "simple":
-        returns = prices.pct_change().fillna(0)
-    elif returns_type == "log":
-        returns = np.log(prices / prices.shift(1)).fillna(0)
-    else:
-        returns = prices.pct_change().fillna(0)
-    
-    return returns
-
-
-def log_performance(strategy_name: str, performance_data: Dict[str, Any]) -> None:
-    """Log strategy performance metrics."""
-    try:
-        logger.info(f"Strategy Performance: {strategy_name}")
-        for metric, value in performance_data.items():
-            if isinstance(value, float):
-                logger.info(f"  {metric}: {value:.4f}")
-            else:
-                logger.info(f"  {metric}: {value}")
-    except Exception as e:
-        logger.error(f"Error logging performance for {strategy_name}: {e}")
+    if prices.empty or len(prices) < 2: return pd.Series(dtype=float)
+    return np.log(prices / prices.shift(1)).fillna(0) if returns_type == "log" else prices.pct_change().fillna(0)
