@@ -1,45 +1,42 @@
 #!/bin/bash
 # ------------------------------------------------------------------
-# Test Airflow DAGs Locally (Isolated Environment)
+# Test Airflow DAGs using Production Environment (docker-compose.yml)
 #
 # Steps:
 #   1. Test local DAG imports
-#   2. Stop old test containers
-#   3. Start new ones: docker compose -f docker-compose.test.yml up -d
+#   2. Copy DAGs to production location (src/airflow_dags/)
+#   3. Start production environment: docker compose up -d
 #   4. Wait for Airflow to be ready
 #   5. Run DAG tests + report results
 #
-# Uses apache/airflow:2.7.3-python3.11
-# Mounts ./src/dags → /opt/airflow/test_dags
-# No image build needed — DAGs loaded directly from local folder.
-# Uses separate test Docker environment to avoid impacting main Airflow
+# Uses docker-compose.yml (production environment)
+# Mounts ./src/airflow_dags → /opt/airflow/dags
 
 set -e
 
-echo "🚀 NEW DAG STRUCTURE VALIDATION (TEST ENVIRONMENT)"
-echo "================================================="
+echo "🚀 DAG VALIDATION (PRODUCTION ENVIRONMENT)"
+echo "==========================================="
 
-# Set environment for new DAG folder
-export AIRFLOW__CORE__DAGS_FOLDER="$(pwd)/src/dags"
+# Set environment for production
 export POSTGRES_HOST=localhost
 export POSTGRES_DB=airflow 
 export POSTGRES_USER=airflow
 export POSTGRES_PASSWORD=airflow
-export AIRFLOW_UID=50000
 
-echo "📁 DAG Folder: $AIRFLOW__CORE__DAGS_FOLDER"
-echo "🐳 Using isolated test Docker environment (port 8081)"
+echo "📁 Source DAG Folder: $(pwd)/src/dags"
+echo "📁 Production DAG Folder: $(pwd)/src/airflow_dags"
+echo "🐳 Using main production Docker environment (port 8080)"
 echo ""
 
-# Check if new dags folder exists
+# Check if source dags folder exists
 if [ ! -d "src/dags" ]; then
     echo "❌ ERROR: src/dags/ folder not found!"
-    echo "   Expected new streamlined DAG structure not present"
+    echo "   Expected streamlined DAG structure not present"
     exit 1
 fi
 
-echo "🔍 SCANNING NEW DAG FOLDER"
-echo "=========================="
+echo "🔍 SCANNING SOURCE DAG FOLDER"
+echo "=============================="
 
 # List Python files in dags folder
 dag_files=$(find src/dags -name "*.py" -not -name "__*" 2>/dev/null || echo "")
@@ -53,6 +50,15 @@ echo "📋 Found DAG files:"
 for file in $dag_files; do
     echo "   - $file"
 done
+echo ""
+
+# Copy DAGs to production location
+echo "📋 COPYING DAGS TO PRODUCTION LOCATION"
+echo "======================================="
+
+mkdir -p src/airflow_dags
+cp -r src/dags/* src/airflow_dags/
+echo "✅ DAGs copied from src/dags/ to src/airflow_dags/"
 echo ""
 
 # Expected DAGs for streamlined structure (final goal: 3 DAGs)
@@ -122,75 +128,56 @@ else
 fi
 echo ""
 
-echo "🐳 STARTING TEST DOCKER ENVIRONMENT"
-echo "=================================="
+echo "🐳 STARTING PRODUCTION DOCKER ENVIRONMENT"
+echo "=========================================="
 
-echo "🛑 Completely cleaning test environment..."
-docker compose -f docker-compose.test.yml down --volumes --remove-orphans 2>/dev/null || true
+echo "🛑 Stopping any running services..."
+docker compose down 2>/dev/null || true
 
-# Remove any leftover test volumes to ensure fresh start
-echo "🧹 Removing any leftover test volumes..."
-docker volume rm ai-trading-advisor_test_postgres_data 2>/dev/null || true
-docker volume rm ai-trading-advisor_test_airflow_logs 2>/dev/null || true
-docker volume rm ai-trading-advisor_test_airflow_plugins 2>/dev/null || true
+echo "🚀 Starting production Airflow environment..."
+docker compose up -d
 
-# Remove any test containers that might be lingering
-echo "🗑️  Removing any test containers..."
-docker container rm ai-trading-advisor-test-postgres-1 2>/dev/null || true
-docker container rm ai-trading-advisor-test-airflow-webserver-1 2>/dev/null || true
-docker container rm ai-trading-advisor-test-airflow-scheduler-1 2>/dev/null || true
-docker container rm ai-trading-advisor-test-airflow-init-1 2>/dev/null || true
+echo "⏳ Waiting for production Airflow to initialize..."
+sleep 60
 
-echo "✅ Test environment completely cleaned"
-
-echo "🚀 Starting isolated test Airflow environment..."
-echo "   - Test Airflow UI will be available on port 8081"
-echo "   - This won't affect your main Airflow on port 8080"
-
-# Start test environment
-docker compose -f docker-compose.test.yml up -d
-
-echo "⏳ Waiting for fresh test Airflow to initialize (longer wait for clean start)..."
-sleep 90
-
-# Wait for test Airflow to be ready
-echo "🔄 Checking test Airflow health..."
-max_attempts=20
+# Wait for Airflow to be ready
+echo "🔄 Checking production Airflow health..."
+max_attempts=15
 attempt=0
 
 while [ $attempt -lt $max_attempts ]; do
-    health_check=$(curl -s http://localhost:8081/health 2>/dev/null || echo "failed")
-    web_access=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8081 2>/dev/null || echo "000")
+    health_check=$(curl -s http://localhost:8080/health 2>/dev/null || echo "failed")
+    web_access=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080 2>/dev/null || echo "000")
     
     # Accept both 200 and 302 as valid (302 is redirect to login page)
     if [[ "$health_check" != "failed" ]] && ([[ "$web_access" == "200" ]] || [[ "$web_access" == "302" ]]); then
-        echo "✅ Test Airflow is ready!"
-        echo "   Health endpoint: ✅ http://localhost:8081/health"
-        echo "   Web interface: ✅ http://localhost:8081 (HTTP $web_access)"
+        echo "✅ Production Airflow is ready!"
+        echo "   Health endpoint: ✅ http://localhost:8080/health"
+        echo "   Web interface: ✅ http://localhost:8080 (HTTP $web_access)"
         break
     fi
     
     attempt=$((attempt + 1))
     echo "   Attempt $attempt/$max_attempts (Health: $health_check, Web: HTTP $web_access)..."
-    sleep 10
+    sleep 15
 done
 
 if [ $attempt -eq $max_attempts ]; then
-    echo "❌ Test Airflow not ready after $max_attempts attempts"
+    echo "❌ Production Airflow not ready after $max_attempts attempts"
     echo "🔍 Checking what's wrong..."
     
     # Check if containers are running
     echo "📋 Container status:"
-    docker compose -f docker-compose.test.yml ps
+    docker compose ps
     
     # Check web access specifically
-    web_status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8081 2>/dev/null || echo "000")
+    web_status=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080 2>/dev/null || echo "000")
     echo "🌐 Web access test: HTTP $web_status"
     
     if [[ "$web_status" != "200" ]] && [[ "$web_status" != "302" ]]; then
-        echo "❌ http://localhost:8081 is not accessible (HTTP $web_status)"
+        echo "❌ http://localhost:8080 is not accessible (HTTP $web_status)"
         echo "🔍 Checking webserver logs..."
-        docker compose -f docker-compose.test.yml logs test-airflow-webserver | tail -20
+        docker compose logs airflow-webserver | tail -20
         exit 1
     else
         echo "⚠️  Continuing with limited functionality..."
@@ -198,34 +185,25 @@ if [ $attempt -eq $max_attempts ]; then
 fi
 
 echo ""
-echo "🔧 Creating default_pool to prevent infinite DAGs..."
-docker compose -f docker-compose.test.yml exec test-airflow-webserver airflow pools set default_pool 5 "Default pool" > /dev/null 2>&1
+echo "📋 DAG STATUS IN PRODUCTION AIRFLOW"
+echo "===================================="
 
-echo "⏸️  Pausing DAGs to prevent auto-scheduling during test..."
-docker compose -f docker-compose.test.yml exec test-airflow-webserver airflow dags pause data_collection > /dev/null 2>&1
-docker compose -f docker-compose.test.yml exec test-airflow-webserver airflow dags pause analysis > /dev/null 2>&1
-docker compose -f docker-compose.test.yml exec test-airflow-webserver airflow dags pause trading > /dev/null 2>&1
-echo "✅ All DAGs paused (will trigger manually only)"
-echo ""
-
-echo "📋 DAG STATUS IN TEST AIRFLOW"
-echo "============================"
-
-# Quick DAG verification (simplified)
-echo "🔍 Quick DAG verification in test Airflow..."
+# Quick DAG verification
+echo "🔍 Quick DAG verification in production Airflow..."
 
 # Wait for DAGs to be loaded by the scheduler
 echo "⏳ Waiting for DAGs to be loaded by scheduler..."
-sleep 20
+sleep 30
 
 # Simple DAG list check
 echo "📋 Checking if DAGs are loaded..."
-all_dags_output=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver airflow dags list 2>/dev/null | grep -E "(data_collection|analysis|trading)" || echo "")
+all_dags_output=$(docker compose exec airflow-webserver airflow dags list 2>/dev/null | grep -E "(data_collection|analysis|trading)" || echo "")
 
 if [ -n "$all_dags_output" ]; then
-    echo "✅ DAGs found in Airflow"
+    echo "✅ DAGs found in Airflow:"
+    echo "$all_dags_output"
 else
-    echo "⚠️  DAGs not yet visible in Airflow (may still be loading)"
+    echo "⚠️ DAGs not yet visible in Airflow (may still be loading)"
 fi
 
 echo "🚀 Proceeding to execution testing..."
