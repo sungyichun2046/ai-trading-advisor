@@ -19,8 +19,15 @@ from src.utils.shared import (
     calculate_volatility,
     log_performance,
     send_alerts,
-    aggregate_data_quality_scores
+    aggregate_data_quality_scores,
+    calculate_vix_regime,
+    normalize_options_data,
+    detect_unusual_volume,
+    calculate_pattern_confidence,
+    normalize_signals
 )
+import pandas as pd
+import numpy as np
 
 
 class TestGetDataManager:
@@ -257,3 +264,280 @@ class TestAggregateDataQualityScores:
         assert result['grade'] == 'poor'
         assert result['total_issues'] == 3
         assert result['data_completeness'] == 0.0  # No sources >= 0.8
+
+
+class TestVixRegimeCalculation:
+    """Test VIX regime calculation function."""
+    
+    def test_vix_regime_low(self):
+        """Test low volatility regime classification."""
+        result = calculate_vix_regime(10.0)
+        
+        assert result['regime'] == 'low'
+        assert result['vix_level'] == 10.0
+        assert result['description'] == 'Low volatility environment'
+        assert 'percentile' in result
+    
+    def test_vix_regime_normal(self):
+        """Test normal volatility regime classification."""
+        result = calculate_vix_regime(15.0)
+        
+        assert result['regime'] == 'normal'
+        assert result['vix_level'] == 15.0
+        assert result['description'] == 'Normal volatility environment'
+    
+    def test_vix_regime_elevated(self):
+        """Test elevated volatility regime classification."""
+        result = calculate_vix_regime(25.0)
+        
+        assert result['regime'] == 'elevated'
+        assert result['vix_level'] == 25.0
+        assert result['description'] == 'Elevated volatility environment'
+    
+    def test_vix_regime_high(self):
+        """Test high volatility regime classification."""
+        result = calculate_vix_regime(35.0)
+        
+        assert result['regime'] == 'high'
+        assert result['vix_level'] == 35.0
+        assert result['description'] == 'High volatility environment'
+    
+    def test_vix_regime_none_input(self):
+        """Test VIX regime with None input."""
+        result = calculate_vix_regime(None)
+        
+        assert result['regime'] == 'normal'
+        assert result['vix_level'] == 18.5
+    
+    def test_vix_regime_nan_input(self):
+        """Test VIX regime with NaN input."""
+        result = calculate_vix_regime(np.nan)
+        
+        assert result['regime'] == 'normal'
+        assert result['vix_level'] == 18.5
+
+
+class TestOptionsNormalization:
+    """Test options data normalization function."""
+    
+    def test_options_normalization_real_data(self):
+        """Test normalization with real options data."""
+        df = pd.DataFrame({
+            'strike': [100, 105, 110, 115, 120],
+            'call_volume': [1000, 800, 600, 400, 200],
+            'put_volume': [200, 400, 600, 800, 1000],
+            'iv': [0.15, 0.18, 0.22, 0.25, 0.30]
+        })
+        
+        result = normalize_options_data(df)
+        
+        assert len(result) == 5
+        assert 'call_volume' in result.columns
+        assert 'put_volume' in result.columns
+        assert 'iv' in result.columns
+        assert result['iv'].max() <= 2.0  # Clipped max
+    
+    def test_options_normalization_empty_data(self):
+        """Test normalization with empty DataFrame."""
+        df = pd.DataFrame()
+        
+        result = normalize_options_data(df)
+        
+        assert len(result) == 5
+        assert 'strike' in result.columns
+        assert 'call_volume' in result.columns
+        assert 'put_volume' in result.columns
+        assert 'iv' in result.columns
+    
+    def test_options_normalization_volume_scaling(self):
+        """Test volume normalization to 0-1 range."""
+        df = pd.DataFrame({
+            'strike': [100, 110],
+            'call_volume': [0, 1000],  # Min-max for testing
+            'put_volume': [500, 1500],
+            'iv': [0.2, 0.3]
+        })
+        
+        result = normalize_options_data(df)
+        
+        # Call volume should be normalized to 0-1
+        assert result['call_volume'].min() == 0.0
+        assert abs(result['call_volume'].max() - 1.0) < 1e-10
+
+
+class TestVolumeAnomalyDetection:
+    """Test volume anomaly detection function."""
+    
+    def test_volume_anomaly_normal(self):
+        """Test normal volume detection."""
+        result = detect_unusual_volume(1000000, 1000000)
+        
+        assert result['volume_ratio'] == 1.0
+        assert result['classification'] == 'normal'
+        assert result['is_unusual'] is False
+    
+    def test_volume_anomaly_high(self):
+        """Test high volume detection."""
+        result = detect_unusual_volume(1800000, 1000000)
+        
+        assert result['volume_ratio'] == 1.8
+        assert result['classification'] == 'high'
+        assert result['is_unusual'] is True
+    
+    def test_volume_anomaly_very_high(self):
+        """Test very high volume detection."""
+        result = detect_unusual_volume(2500000, 1000000)
+        
+        assert result['volume_ratio'] == 2.5
+        assert result['classification'] == 'very_high'
+        assert result['is_unusual'] is True
+    
+    def test_volume_anomaly_extremely_high(self):
+        """Test extremely high volume detection."""
+        result = detect_unusual_volume(3500000, 1000000)
+        
+        assert result['volume_ratio'] == 3.5
+        assert result['classification'] == 'extremely_high'
+        assert result['is_unusual'] is True
+    
+    def test_volume_anomaly_low(self):
+        """Test low volume detection."""
+        result = detect_unusual_volume(400000, 1000000)
+        
+        assert result['volume_ratio'] == 0.4
+        assert result['classification'] == 'low'
+        assert result['is_unusual'] is True
+    
+    def test_volume_anomaly_none_input(self):
+        """Test volume anomaly with None inputs."""
+        result = detect_unusual_volume(None, None)
+        
+        assert 'volume' in result
+        assert 'classification' in result
+        assert result['volume'] == 1500000
+        assert result['avg_volume'] == 1000000
+
+
+class TestPatternConfidence:
+    """Test pattern confidence calculation function."""
+    
+    def test_pattern_confidence_high(self):
+        """Test high confidence pattern."""
+        pattern = {
+            'strength': 0.9,
+            'volume_confirmed': True,
+            'duration_bars': 12
+        }
+        
+        result = calculate_pattern_confidence(pattern)
+        
+        assert 0.8 <= result <= 1.0
+        assert isinstance(result, float)
+    
+    def test_pattern_confidence_medium(self):
+        """Test medium confidence pattern."""
+        pattern = {
+            'strength': 0.6,
+            'volume_confirmed': False,
+            'duration_bars': 3
+        }
+        
+        result = calculate_pattern_confidence(pattern)
+        
+        assert 0.4 <= result <= 0.8
+    
+    def test_pattern_confidence_low(self):
+        """Test low confidence pattern."""
+        pattern = {
+            'strength': 0.3,
+            'volume_confirmed': False,
+            'duration_bars': 2
+        }
+        
+        result = calculate_pattern_confidence(pattern)
+        
+        assert 0.0 <= result <= 0.6
+    
+    def test_pattern_confidence_empty_pattern(self):
+        """Test confidence calculation with empty pattern."""
+        result = calculate_pattern_confidence({})
+        
+        assert result == 0.75
+    
+    def test_pattern_confidence_missing_strength(self):
+        """Test confidence calculation with missing strength."""
+        pattern = {
+            'volume_confirmed': True,
+            'duration_bars': 8
+        }
+        
+        result = calculate_pattern_confidence(pattern)
+        
+        assert result == 0.75  # Fallback value
+
+
+class TestSignalNormalization:
+    """Test signal normalization function."""
+    
+    def test_signal_normalization_rsi(self):
+        """Test RSI signal normalization."""
+        signals = {
+            'rsi': 70,
+            'stoch': 85
+        }
+        
+        result = normalize_signals(signals)
+        
+        assert result['rsi'] == 0.7  # 70/100
+        assert result['stoch'] == 0.85  # 85/100
+        assert all(0 <= v <= 1 for v in result.values())
+    
+    def test_signal_normalization_macd(self):
+        """Test MACD signal normalization."""
+        signals = {
+            'macd': 0.5,
+            'momentum': -0.2
+        }
+        
+        result = normalize_signals(signals)
+        
+        assert result['macd'] == 0.75  # (0.5 + 1) / 2
+        assert result['momentum'] == 0.4  # (-0.2 + 1) / 2
+    
+    def test_signal_normalization_mixed(self):
+        """Test mixed signal normalization."""
+        signals = {
+            'rsi': 65,
+            'macd': 0.3,
+            'custom': 1.5
+        }
+        
+        result = normalize_signals(signals)
+        
+        assert result['rsi'] == 0.65
+        assert result['macd'] == 0.65  # (0.3 + 1) / 2
+        assert result['custom'] == 1.0  # Clipped to 1.0
+        assert all(0 <= v <= 1 for v in result.values())
+    
+    def test_signal_normalization_empty(self):
+        """Test normalization with empty signals."""
+        result = normalize_signals({})
+        
+        assert 'rsi' in result
+        assert 'macd' in result
+        assert 'momentum' in result
+        assert all(0 <= v <= 1 for v in result.values())
+    
+    def test_signal_normalization_none_values(self):
+        """Test normalization with None values."""
+        signals = {
+            'rsi': None,
+            'macd': 0.2,
+            'momentum': None
+        }
+        
+        result = normalize_signals(signals)
+        
+        assert result['rsi'] == 0.5  # None -> 0.5
+        assert result['macd'] == 0.6  # (0.2 + 1) / 2
+        assert result['momentum'] == 0.5  # None -> 0.5
