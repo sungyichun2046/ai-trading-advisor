@@ -209,3 +209,7 @@ __marimo__/
 
 # logs
 logs/
+
+# production mirror created after running check_dags.sh
+/src/airflow_dags/
+/src/airflow_dags/**

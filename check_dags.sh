@@ -254,21 +254,21 @@ echo "🔧 Using default_pool created earlier..."
 echo "🎯 Executing one manual trigger per DAG (unpause → trigger → pause)..."
 
 # Data Collection DAG
-docker compose -f docker-compose.test.yml exec test-airflow-webserver airflow dags unpause data_collection > /dev/null 2>&1
-docker compose -f docker-compose.test.yml exec test-airflow-webserver airflow dags trigger data_collection > /dev/null 2>&1
-docker compose -f docker-compose.test.yml exec test-airflow-webserver airflow dags pause data_collection > /dev/null 2>&1
+docker compose -f docker-compose.yml exec test-airflow-webserver airflow dags unpause data_collection > /dev/null 2>&1
+docker compose -f docker-compose.yml exec test-airflow-webserver airflow dags trigger data_collection > /dev/null 2>&1
+docker compose -f docker-compose.yml exec test-airflow-webserver airflow dags pause data_collection > /dev/null 2>&1
 
 # Analysis DAG  
-docker compose -f docker-compose.test.yml exec test-airflow-webserver airflow dags unpause analysis > /dev/null 2>&1
-docker compose -f docker-compose.test.yml exec test-airflow-webserver airflow dags trigger analysis > /dev/null 2>&1
-docker compose -f docker-compose.test.yml exec test-airflow-webserver airflow dags pause analysis > /dev/null 2>&1
+docker compose -f docker-compose.yml exec test-airflow-webserver airflow dags unpause analysis > /dev/null 2>&1
+docker compose -f docker-compose.yml exec test-airflow-webserver airflow dags trigger analysis > /dev/null 2>&1
+docker compose -f docker-compose.yml exec test-airflow-webserver airflow dags pause analysis > /dev/null 2>&1
 
 # Trading DAG (with small delay to ensure trigger registers)
-docker compose -f docker-compose.test.yml exec test-airflow-webserver airflow dags unpause trading > /dev/null 2>&1
+docker compose -f docker-compose.yml exec test-airflow-webserver airflow dags unpause trading > /dev/null 2>&1
 sleep 2  # Brief pause to ensure unpause registers
-docker compose -f docker-compose.test.yml exec test-airflow-webserver airflow dags trigger trading > /dev/null 2>&1
+docker compose -f docker-compose.yml exec test-airflow-webserver airflow dags trigger trading > /dev/null 2>&1
 sleep 2  # Brief pause to ensure trigger registers
-docker compose -f docker-compose.test.yml exec test-airflow-webserver airflow dags pause trading > /dev/null 2>&1
+docker compose -f docker-compose.yml exec test-airflow-webserver airflow dags pause trading > /dev/null 2>&1
 
 echo "✅ All DAGs triggered once and re-paused"
 
@@ -285,46 +285,46 @@ echo "========================"
 # Get final counts - distinguish between 'running' and 'success' runs for each DAG
 
 # Count successful runs
-data_success=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+data_success=$(docker compose -f docker-compose.yml exec test-airflow-webserver \
     airflow dags list-runs -d data_collection 2>/dev/null \
     | grep -c "success" | tr -d '\r' || echo "0")
-analysis_success=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+analysis_success=$(docker compose -f docker-compose.yml exec test-airflow-webserver \
     airflow dags list-runs -d analysis 2>/dev/null \
     | grep -c "success" | tr -d '\r' || echo "0")
-trading_success=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+trading_success=$(docker compose -f docker-compose.yml exec test-airflow-webserver \
     airflow dags list-runs -d trading 2>/dev/null \
     | grep -c "success" | tr -d '\r' || echo "0")
 
 # Count running runs
-data_running=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+data_running=$(docker compose -f docker-compose.yml exec test-airflow-webserver \
     airflow dags list-runs -d data_collection 2>/dev/null \
     | grep -c "running" | tr -d '\r' || echo "0")
-analysis_running=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+analysis_running=$(docker compose -f docker-compose.yml exec test-airflow-webserver \
     airflow dags list-runs -d analysis 2>/dev/null \
     | grep -c "running" | tr -d '\r' || echo "0")
-trading_running=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+trading_running=$(docker compose -f docker-compose.yml exec test-airflow-webserver \
     airflow dags list-runs -d trading 2>/dev/null \
     | grep -c "running" | tr -d '\r' || echo "0")
 
 # Count queued runs
-data_queued=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+data_queued=$(docker compose -f docker-compose.yml exec test-airflow-webserver \
     airflow dags list-runs -d data_collection 2>/dev/null \
     | grep -c "queued" | tr -d '\r' || echo "0")
-analysis_queued=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+analysis_queued=$(docker compose -f docker-compose.yml exec test-airflow-webserver \
     airflow dags list-runs -d analysis 2>/dev/null \
     | grep -c "queued" | tr -d '\r' || echo "0")
-trading_queued=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+trading_queued=$(docker compose -f docker-compose.yml exec test-airflow-webserver \
     airflow dags list-runs -d trading 2>/dev/null \
     | grep -c "queued" | tr -d '\r' || echo "0")
 
 # Count failed runs
-data_failed=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+data_failed=$(docker compose -f docker-compose.yml exec test-airflow-webserver \
     airflow dags list-runs -d data_collection 2>/dev/null \
     | grep -c "failed" | tr -d '\r' || echo "0")
-analysis_failed=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+analysis_failed=$(docker compose -f docker-compose.yml exec test-airflow-webserver \
     airflow dags list-runs -d analysis 2>/dev/null \
     | grep -c "failed" | tr -d '\r' || echo "0")
-trading_failed=$(docker compose -f docker-compose.test.yml exec test-airflow-webserver \
+trading_failed=$(docker compose -f docker-compose.yml exec test-airflow-webserver \
     airflow dags list-runs -d trading 2>/dev/null \
     | grep -c "failed" | tr -d '\r' || echo "0")
 

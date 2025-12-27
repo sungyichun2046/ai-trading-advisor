@@ -221,8 +221,8 @@ class TestSentimentAnalyzer:
     
     @patch('src.core.analysis_engine.get_data_manager')
     def test_analyze_sentiment_failure(self, mock_get_data_manager):
-        """Test sentiment analysis with failed data collection."""
-        # Mock failed data manager
+        """Test sentiment analysis with failed news data collection but enhanced components still work."""
+        # Mock failed data manager for news sentiment
         mock_data_manager = Mock()
         mock_data_manager.collect_sentiment_data.return_value = {'status': 'failed'}
         mock_get_data_manager.return_value = mock_data_manager
@@ -231,8 +231,87 @@ class TestSentimentAnalyzer:
         analyzer = SentimentAnalyzer()
         result = analyzer.analyze_sentiment()
         
-        assert result['status'] == 'failed'
-        assert result['sentiment_bias'] == 'neutral'
+        # With enhanced sentiment, even if news fails, other components still work
+        assert result['status'] == 'success'  # Enhanced analyzer has fallback components
+        assert 'components' in result  # Enhanced result structure
+        assert 'news_sentiment' in result['components']
+        assert result['components']['news_sentiment'] == 0.0  # News failed, defaults to 0
+        assert 'vix_sentiment' in result['components']  # VIX component still works
+        assert result['sentiment_bias'] in ['bullish', 'bearish', 'neutral']
+    
+    def test_enhanced_sentiment_integration(self):
+        """Test enhanced sentiment analysis with VIX, options, and institutional components."""
+        with patch('src.core.analysis_engine.get_data_manager') as mock_get_data_manager:
+            # Mock data manager for base sentiment
+            mock_data_manager = Mock()
+            mock_data_manager.collect_sentiment_data.return_value = {
+                'status': 'success',
+                'articles': [{'sentiment_score': 0.2, 'sentiment_label': 'positive'}]
+            }
+            mock_get_data_manager.return_value = mock_data_manager
+            
+            analyzer = SentimentAnalyzer()
+            result = analyzer.analyze_sentiment(max_articles=10)
+            
+            # Test enhanced result structure
+            assert result['status'] == 'success'
+            assert 'components' in result
+            assert 'vix_regime' in result['components']
+            assert 'vix_sentiment' in result['components']
+            assert 'put_call_sentiment' in result['components']
+            assert 'max_pain_sentiment' in result['components'] 
+            assert 'institutional_flow' in result['components']
+            assert 'short_interest_sentiment' in result['components']
+            assert 'dark_pool_sentiment' in result['components']
+            assert 'news_sentiment' in result['components']
+            
+            # Test sentiment score is combined from multiple sources
+            assert result['sentiment_score'] != result['components']['news_sentiment']
+            assert result['confidence'] > 0.0
+    
+    def test_vix_sentiment_component(self):
+        """Test VIX sentiment component calculation."""
+        analyzer = SentimentAnalyzer()
+        
+        # Test VIX sentiment method directly
+        vix_result = analyzer.()
+        
+        assert 'vix_fear_greed' in vix_result
+        assert 'regime' in vix_result
+        assert vix_result['regime'] in ['low', 'normal', 'elevated', 'high']
+        assert isinstance(vix_result['vix_fear_greed'], float)
+        assert -1.0 <= vix_result['vix_fear_greed'] <= 1.0
+    
+    def test_options_sentiment_component(self):
+        """Test options sentiment component calculation."""
+        analyzer = SentimentAnalyzer()
+        
+        # Test options sentiment method directly
+        options_result = analyzer._get_options_sentiment()
+        
+        assert 'put_call_sentiment' in options_result
+        assert 'max_pain_sentiment' in options_result
+        assert isinstance(options_result['put_call_sentiment'], float)
+        assert isinstance(options_result['max_pain_sentiment'], float)
+        assert -1.0 <= options_result['put_call_sentiment'] <= 1.0
+        assert -1.0 <= options_result['max_pain_sentiment'] <= 1.0
+    
+    def test_institutional_component(self):
+        """Test institutional sentiment component calculation.""" 
+        analyzer = SentimentAnalyzer()
+        
+        # Test institutional sentiment method directly
+        inst_result = analyzer._get_institutional_sentiment()
+        
+        assert 'institutional_flow' in inst_result
+        assert 'short_interest_sentiment' in inst_result
+        assert 'dark_pool_sentiment' in inst_result
+        assert isinstance(inst_result['institutional_flow'], float)
+        assert isinstance(inst_result['short_interest_sentiment'], float)
+        assert isinstance(inst_result['dark_pool_sentiment'], float)
+        assert -1.0 <= inst_result['institutional_flow'] <= 1.0
+        assert -1.0 <= inst_result['short_interest_sentiment'] <= 1.0
+        assert -1.0 <= inst_result['dark_pool_sentiment'] <= 1.0
 
 
 class TestAnalysisEngine:
