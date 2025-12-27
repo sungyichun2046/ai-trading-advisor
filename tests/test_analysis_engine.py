@@ -142,6 +142,109 @@ class TestPatternAnalyzer:
         
         assert isinstance(result['support_levels'], list)
         assert isinstance(result['resistance_levels'], list)
+    
+    def test_enhanced_support_resistance(self):
+        """Test enhanced support/resistance detection with multiple features."""
+        # Create data with clear support/resistance levels
+        dates = pd.date_range('2024-01-01', periods=50, freq='1D')
+        
+        # Price data that bounces between 95-105 with clear levels at 100, 102
+        base_prices = [100 + 5 * np.sin(i / 10) + np.random.random() * 0.5 for i in range(50)]
+        highs = [p + abs(np.random.random() * 1) for p in base_prices]
+        lows = [p - abs(np.random.random() * 1) for p in base_prices]
+        volumes = [1000000 + np.random.randint(-200000, 200000) for _ in range(50)]
+        
+        test_data = pd.DataFrame({
+            'high': highs,
+            'low': lows,
+            'close': base_prices,
+            'volume': volumes
+        }, index=dates)
+        
+        result = self.analyzer.detect_support_resistance(test_data)
+        
+        # Verify enhanced structure
+        assert 'support_levels' in result
+        assert 'resistance_levels' in result
+        assert 'fibonacci_levels' in result
+        assert 'psychological_levels' in result
+        assert 'pivot_analysis' in result
+        
+        # Check that levels have enhanced attributes
+        if result['support_levels']:
+            for level in result['support_levels']:
+                assert 'price' in level
+                assert 'level_type' in level
+                assert 'strength_score' in level
+                assert 0 <= level['strength_score'] <= 1
+        
+        if result['resistance_levels']:
+            for level in result['resistance_levels']:
+                assert 'price' in level
+                assert 'level_type' in level
+                assert 'strength_score' in level
+                assert 0 <= level['strength_score'] <= 1
+    
+    def test_pivot_point_detection(self):
+        """Test pivot point detection integration."""
+        # Create data with clear pivot points (ensure enough data for window=5, need 20+ points)
+        prices = [100, 102, 104, 106, 104, 102, 100, 98, 96, 98, 100, 102, 104, 103, 101, 99, 97, 95, 98, 101, 103, 105, 107, 106, 104, 102, 100]
+        test_data = pd.DataFrame({
+            'high': [p + 0.5 for p in prices],
+            'low': [p - 0.5 for p in prices],
+            'close': prices
+        })
+        
+        result = self.analyzer.detect_support_resistance(test_data)
+        
+        assert 'pivot_analysis' in result
+        assert 'pivot_highs' in result['pivot_analysis']
+        assert 'pivot_lows' in result['pivot_analysis']
+        assert isinstance(result['pivot_analysis']['pivot_highs'], int)
+        assert isinstance(result['pivot_analysis']['pivot_lows'], int)
+    
+    def test_fibonacci_levels(self):
+        """Test Fibonacci retracement level calculation."""
+        # Create data with clear swing high/low
+        prices = list(range(90, 110)) + list(range(110, 90, -1))  # Up then down
+        test_data = pd.DataFrame({
+            'high': [p + 1 for p in prices],
+            'low': [p - 1 for p in prices],
+            'close': prices
+        })
+        
+        result = self.analyzer.detect_support_resistance(test_data)
+        
+        assert 'fibonacci_levels' in result
+        assert len(result['fibonacci_levels']) == 4  # 23.6%, 38.2%, 61.8%, 78.6%
+        
+        # Verify Fibonacci levels are in ascending order within range
+        fib_levels = sorted(result['fibonacci_levels'])
+        assert fib_levels[0] >= min(prices) - 1  # Within low range
+        assert fib_levels[-1] <= max(prices) + 1  # Within high range
+    
+    def test_psychological_levels(self):
+        """Test psychological level identification."""
+        # Create data around round number levels (ensure enough data for window requirement)
+        prices = [98.5, 99.2, 100.1, 99.8, 100.3, 101.1, 100.9, 105.2, 104.8, 110.1, 109.5, 108.7, 107.3, 106.8, 105.4, 104.9, 103.2, 102.6, 101.8, 100.4, 99.7, 98.9, 99.3, 100.2, 101.5]
+        test_data = pd.DataFrame({
+            'high': [p + 0.2 for p in prices],
+            'low': [p - 0.2 for p in prices],
+            'close': prices
+        })
+        
+        result = self.analyzer.detect_support_resistance(test_data)
+        
+        assert 'psychological_levels' in result
+        assert isinstance(result['psychological_levels'], list)
+        
+        # Should include round numbers like 100, 105, 110 for this price range
+        psych_levels = result['psychological_levels']
+        if psych_levels:
+            # Verify they are round numbers
+            for level in psych_levels:
+                assert level == round(level)  # Should be whole numbers
+                assert min(prices) <= level <= max(prices)  # Within price range
 
 
 class TestFundamentalAnalyzer:
@@ -274,7 +377,7 @@ class TestSentimentAnalyzer:
         analyzer = SentimentAnalyzer()
         
         # Test VIX sentiment method directly
-        vix_result = analyzer.()
+        vix_result = analyzer._get_vix_sentiment()
         
         assert 'vix_fear_greed' in vix_result
         assert 'regime' in vix_result

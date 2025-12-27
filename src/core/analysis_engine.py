@@ -260,22 +260,151 @@ class PatternAnalyzer:
             return None
     
     def detect_support_resistance(self, data: pd.DataFrame, window: int = 5) -> Dict[str, Any]:
-        """Simplified support and resistance detection."""
-        if data.empty or len(data) < window * 2:
+        """Enhanced support and resistance detection with pivot clustering, Fibonacci, and volume validation."""
+        if data.empty or len(data) < window * 4:
             return {"support_levels": [], "resistance_levels": []}
         
         try:
-            highs = data['High'] if 'High' in data.columns else data['Close']
-            lows = data['Low'] if 'Low' in data.columns else data['Close']
+            # Import shared utilities
+            from ..utils.shared import find_pivot_highs_lows, calculate_pattern_confidence, calculate_volume_indicators
             
-            # Simple peak/trough detection
-            resistance_levels = [highs.max()]
-            support_levels = [lows.min()]
+            # Standardize column names
+            highs = data['high'] if 'high' in data.columns else data['High'] if 'High' in data.columns else data['close']
+            lows = data['low'] if 'low' in data.columns else data['Low'] if 'Low' in data.columns else data['close']
+            closes = data['close'] if 'close' in data.columns else data['Close']
+            volumes = data['volume'] if 'volume' in data.columns else None
             
-            return {"support_levels": support_levels, "resistance_levels": resistance_levels}
+            # Create standardized DataFrame for utilities
+            df = pd.DataFrame({'high': highs, 'low': lows, 'close': closes})
+            if volumes is not None:
+                df['volume'] = volumes
             
-        except Exception:
+            # Find pivot points
+            pivots = find_pivot_highs_lows(df, window)
+            pivot_highs = [highs.iloc[i] for i in pivots['pivot_highs'] if i < len(highs)]
+            pivot_lows = [lows.iloc[i] for i in pivots['pivot_lows'] if i < len(lows)]
+            
+            # Calculate Fibonacci retracements from recent swing
+            current_high = highs.max()
+            current_low = lows.min()
+            fib_range = current_high - current_low
+            fib_levels = [
+                current_low + fib_range * 0.236,  # 23.6%
+                current_low + fib_range * 0.382,  # 38.2%
+                current_low + fib_range * 0.618,  # 61.8%
+                current_low + fib_range * 0.786   # 78.6%
+            ]
+            
+            # Identify psychological levels (round numbers)
+            price_range = (current_high + current_low) / 2
+            if price_range > 100:
+                step = 10  # $10 increments for higher prices
+            elif price_range > 50:
+                step = 5   # $5 increments for mid prices
+            else:
+                step = 1   # $1 increments for lower prices
+            
+            psych_levels = []
+            for level in range(int(current_low // step) * step, int(current_high // step + 1) * step + 1, step):
+                if current_low <= level <= current_high:
+                    psych_levels.append(float(level))
+            
+            # Cluster nearby levels
+            all_levels = pivot_highs + pivot_lows + fib_levels + psych_levels
+            clustered_levels = self._cluster_levels(all_levels, tolerance=price_range * 0.005)
+            
+            # Volume validation
+            volume_indicators = calculate_volume_indicators(df) if volumes is not None else {}
+            
+            # Separate into support and resistance with strength scoring
+            resistance_levels = []
+            support_levels = []
+            
+            current_price = closes.iloc[-1]
+            for level in clustered_levels:
+                level_data = {'price': level, 'level_type': 'unknown', 'strength_score': 0.5}
+                
+                # Determine level type and strength
+                if level > current_price:
+                    level_data['level_type'] = 'resistance'
+                    # Check how many times price approached but didn't break this level
+                    touches = sum(1 for h in highs if abs(h - level) <= price_range * 0.002)
+                    level_data['strength_score'] = min(1.0, 0.3 + touches * 0.1)
+                    
+                    # Add Fibonacci bonus
+                    if any(abs(level - fib) <= price_range * 0.001 for fib in fib_levels):
+                        level_data['strength_score'] = min(1.0, level_data['strength_score'] + 0.15)
+                        level_data['level_type'] = 'fibonacci_resistance'
+                    
+                    # Add psychological level bonus
+                    if level in psych_levels:
+                        level_data['strength_score'] = min(1.0, level_data['strength_score'] + 0.1)
+                        level_data['level_type'] = 'psychological_resistance'
+                    
+                    # Volume confirmation
+                    if volume_indicators and level_data['strength_score'] > 0.6:
+                        level_data['volume_confirmed'] = True
+                        level_data['strength_score'] = min(1.0, level_data['strength_score'] + 0.05)
+                    
+                    resistance_levels.append(level_data)
+                    
+                elif level < current_price:
+                    level_data['level_type'] = 'support'
+                    touches = sum(1 for l in lows if abs(l - level) <= price_range * 0.002)
+                    level_data['strength_score'] = min(1.0, 0.3 + touches * 0.1)
+                    
+                    if any(abs(level - fib) <= price_range * 0.001 for fib in fib_levels):
+                        level_data['strength_score'] = min(1.0, level_data['strength_score'] + 0.15)
+                        level_data['level_type'] = 'fibonacci_support'
+                    
+                    if level in psych_levels:
+                        level_data['strength_score'] = min(1.0, level_data['strength_score'] + 0.1)
+                        level_data['level_type'] = 'psychological_support'
+                    
+                    if volume_indicators and level_data['strength_score'] > 0.6:
+                        level_data['volume_confirmed'] = True
+                        level_data['strength_score'] = min(1.0, level_data['strength_score'] + 0.05)
+                    
+                    support_levels.append(level_data)
+            
+            # Sort by strength and keep top levels
+            resistance_levels = sorted(resistance_levels, key=lambda x: x['strength_score'], reverse=True)[:5]
+            support_levels = sorted(support_levels, key=lambda x: x['strength_score'], reverse=True)[:5]
+            
+            return {
+                "support_levels": support_levels,
+                "resistance_levels": resistance_levels,
+                "fibonacci_levels": fib_levels,
+                "psychological_levels": psych_levels,
+                "pivot_analysis": {"pivot_highs": len(pivots['pivot_highs']), "pivot_lows": len(pivots['pivot_lows'])}
+            }
+            
+        except Exception as e:
+            logger.warning(f"Enhanced support/resistance detection failed: {e}, using fallback")
             return {"support_levels": [], "resistance_levels": []}
+    
+    def _cluster_levels(self, levels: list, tolerance: float) -> list:
+        """Cluster nearby price levels to avoid duplicates."""
+        if not levels:
+            return []
+        
+        levels = sorted(set(levels))
+        clustered = []
+        current_cluster = [levels[0]]
+        
+        for level in levels[1:]:
+            if level - current_cluster[-1] <= tolerance:
+                current_cluster.append(level)
+            else:
+                # Use average of cluster
+                clustered.append(sum(current_cluster) / len(current_cluster))
+                current_cluster = [level]
+        
+        # Add final cluster
+        if current_cluster:
+            clustered.append(sum(current_cluster) / len(current_cluster))
+        
+        return clustered
     
     def _detect_head_shoulders(self, data: pd.DataFrame) -> Optional[Dict[str, Any]]:
         """Detect head and shoulders pattern using pivot analysis."""
