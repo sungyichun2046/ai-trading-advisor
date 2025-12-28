@@ -5,16 +5,36 @@ Eliminates code duplication and provides centralized implementations.
 
 import logging
 from datetime import datetime
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List, Optional, Union, Callable, Set
 import sys
 import os
 import numpy as np
 import pandas as pd
+import asyncio
+import json
+import time
+import threading
+from collections import deque
 
 logger = logging.getLogger(__name__)
 
 # Add parent directories to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+
+# WebSocket availability check
+try:
+    import websockets
+    WEBSOCKETS_AVAILABLE = True
+except ImportError:
+    WEBSOCKETS_AVAILABLE = False
+
+# Cache manager availability check
+try:
+    from .caching_manager import get_cache_manager
+except ImportError:
+    def get_cache_manager():
+        """Fallback when caching manager not available."""
+        return None
 
 
 def get_data_manager():
@@ -662,3 +682,342 @@ def validate_signal_quality(signal: Dict[str, Any], age_minutes: int) -> Dict[st
     except Exception as e:
         logger.warning(f"Signal validation failed: {e}, using dummy result")
         return {'is_valid': True, 'quality_score': 0.75, 'issues': [], 'age_minutes': 15}
+
+
+# =============================================================================
+# WEBSOCKET AND STREAMING UTILITIES
+# =============================================================================
+
+# Global WebSocket connections registry
+_websocket_connections = {}
+_stream_buffers = {}
+_connection_lock = threading.RLock()
+
+
+def setup_websocket_connection(url: str, handlers: Dict[str, Callable], 
+                             auto_reconnect: bool = True, max_retries: int = 5) -> Dict[str, Any]:
+    """
+    Setup WebSocket connection with auto-reconnection and handlers.
+    
+    Args:
+        url: WebSocket URL to connect to
+        handlers: Dictionary of message type handlers {message_type: handler_function}
+        auto_reconnect: Enable automatic reconnection
+        max_retries: Maximum reconnection attempts
+        
+    Returns:
+        Connection status and details
+    """
+    try:
+        if not WEBSOCKETS_AVAILABLE:
+            logger.warning("WebSocket connection requested but websockets package not available")
+            return {
+                'status': 'unavailable',
+                'message': 'WebSocket package not installed',
+                'connection_id': None
+            }
+        
+        connection_id = f"ws_{hash(url)}_{int(time.time())}"
+        
+        with _connection_lock:
+            # Store connection configuration
+            _websocket_connections[connection_id] = {
+                'url': url,
+                'handlers': handlers,
+                'auto_reconnect': auto_reconnect,
+                'max_retries': max_retries,
+                'status': 'connecting',
+                'retry_count': 0,
+                'last_message': None,
+                'connected_at': None
+            }
+        
+        # Start connection in background thread
+        def start_connection():
+            asyncio.new_event_loop().run_until_complete(
+                _websocket_connection_handler(connection_id)
+            )
+        
+        thread = threading.Thread(target=start_connection, daemon=True)
+        thread.start()
+        
+        return {
+            'status': 'connecting',
+            'connection_id': connection_id,
+            'url': url,
+            'handlers_count': len(handlers)
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to setup WebSocket connection to {url}: {e}")
+        return {
+            'status': 'error',
+            'message': str(e),
+            'connection_id': None
+        }
+
+
+def stream_market_data(symbols: List[str], callback: Callable[[Dict[str, Any]], None],
+                      buffer_size: int = 1000, batch_size: int = 10) -> Dict[str, Any]:
+    """
+    Stream market data with buffering and batch processing.
+    
+    Args:
+        symbols: List of symbols to stream
+        callback: Callback function to process streaming data
+        buffer_size: Maximum buffer size for incoming data
+        batch_size: Number of messages to batch before processing
+        
+    Returns:
+        Stream configuration and status
+    """
+    try:
+        stream_id = f"market_stream_{hash(tuple(symbols))}_{int(time.time())}"
+        
+        with _connection_lock:
+            # Initialize stream buffer
+            _stream_buffers[stream_id] = {
+                'symbols': symbols,
+                'callback': callback,
+                'buffer': deque(maxlen=buffer_size),
+                'batch_size': batch_size,
+                'processed_count': 0,
+                'error_count': 0,
+                'started_at': datetime.now().isoformat(),
+                'last_processed': None
+            }
+        
+        # Start streaming in background thread
+        def start_streaming():
+            _market_data_streamer(stream_id)
+        
+        thread = threading.Thread(target=start_streaming, daemon=True)
+        thread.start()
+        
+        return {
+            'status': 'streaming',
+            'stream_id': stream_id,
+            'symbols': symbols,
+            'buffer_size': buffer_size,
+            'batch_size': batch_size
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to start market data stream for {symbols}: {e}")
+        return {
+            'status': 'error',
+            'message': str(e),
+            'stream_id': None
+        }
+
+
+def cache_cross_dag_data(key: str, data: Any, ttl: Optional[int] = None) -> bool:
+    """
+    Cache data for cross-DAG sharing using the caching manager.
+    
+    Args:
+        key: Cache key
+        data: Data to cache
+        ttl: Time to live in seconds
+        
+    Returns:
+        Success status
+    """
+    try:
+        cache_manager = get_cache_manager()
+        if cache_manager:
+            return cache_manager.set(key, data, ttl)
+        return False
+    except Exception as e:
+        logger.error(f"Failed to cache cross-DAG data for key {key}: {e}")
+        return False
+
+
+def get_cached_analysis_result(dag_id: str, task_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Retrieve cached analysis result from DAG task.
+    
+    Args:
+        dag_id: DAG identifier
+        task_id: Task identifier
+        
+    Returns:
+        Cached analysis result or None
+    """
+    try:
+        cache_manager = get_cache_manager()
+        if cache_manager:
+            return cache_manager.get_cached_analysis_result(dag_id, task_id)
+        return None
+    except Exception as e:
+        logger.error(f"Failed to get cached analysis result for {dag_id}.{task_id}: {e}")
+        return None
+
+
+async def _websocket_connection_handler(connection_id: str):
+    """Handle WebSocket connection with auto-reconnection."""
+    try:
+        if connection_id not in _websocket_connections:
+            return
+        
+        config = _websocket_connections[connection_id]
+        url = config['url']
+        handlers = config['handlers']
+        
+        while config['retry_count'] <= config['max_retries']:
+            try:
+                logger.info(f"Connecting to WebSocket: {url}")
+                
+                async with websockets.connect(url) as websocket:
+                    config['status'] = 'connected'
+                    config['connected_at'] = datetime.now().isoformat()
+                    config['retry_count'] = 0
+                    
+                    logger.info(f"WebSocket connected: {connection_id}")
+                    
+                    async for message in websocket:
+                        try:
+                            data = json.loads(message)
+                            message_type = data.get('type', 'default')
+                            
+                            config['last_message'] = datetime.now().isoformat()
+                            
+                            # Route to appropriate handler
+                            if message_type in handlers:
+                                handlers[message_type](data)
+                            elif 'default' in handlers:
+                                handlers['default'](data)
+                                
+                        except json.JSONDecodeError:
+                            logger.warning(f"Invalid JSON received on {connection_id}: {message}")
+                        except Exception as e:
+                            logger.error(f"Error processing WebSocket message on {connection_id}: {e}")
+                            
+            except Exception as e:
+                logger.error(f"WebSocket connection error on {connection_id}: {e}")
+                config['status'] = 'disconnected'
+                config['retry_count'] += 1
+                
+                if config['auto_reconnect'] and config['retry_count'] <= config['max_retries']:
+                    wait_time = min(2 ** config['retry_count'], 30)  # Exponential backoff, max 30s
+                    logger.info(f"Reconnecting {connection_id} in {wait_time} seconds (attempt {config['retry_count']})")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"Max retries reached for {connection_id}, giving up")
+                    config['status'] = 'failed'
+                    break
+                    
+    except Exception as e:
+        logger.error(f"Fatal error in WebSocket handler {connection_id}: {e}")
+        if connection_id in _websocket_connections:
+            _websocket_connections[connection_id]['status'] = 'failed'
+
+
+def _market_data_streamer(stream_id: str):
+    """Simulate market data streaming with buffering."""
+    try:
+        if stream_id not in _stream_buffers:
+            return
+        
+        stream_config = _stream_buffers[stream_id]
+        symbols = stream_config['symbols']
+        callback = stream_config['callback']
+        buffer = stream_config['buffer']
+        batch_size = stream_config['batch_size']
+        
+        logger.info(f"Starting market data stream for {symbols}")
+        
+        while True:
+            try:
+                # Simulate incoming market data
+                for symbol in symbols:
+                    mock_data = {
+                        'symbol': symbol,
+                        'price': 100 + np.random.randn() * 5,
+                        'volume': np.random.randint(1000, 10000),
+                        'timestamp': datetime.now().isoformat(),
+                        'bid': 100 + np.random.randn() * 5,
+                        'ask': 100 + np.random.randn() * 5 + 0.01
+                    }
+                    buffer.append(mock_data)
+                
+                # Process batch if buffer has enough data
+                if len(buffer) >= batch_size:
+                    batch = []
+                    for _ in range(min(batch_size, len(buffer))):
+                        if buffer:
+                            batch.append(buffer.popleft())
+                    
+                    if batch:
+                        try:
+                            callback(batch)
+                            stream_config['processed_count'] += len(batch)
+                            stream_config['last_processed'] = datetime.now().isoformat()
+                        except Exception as e:
+                            logger.error(f"Error in stream callback for {stream_id}: {e}")
+                            stream_config['error_count'] += 1
+                
+                # Simulate real-time data frequency (every 100ms)
+                time.sleep(0.1)
+                
+            except Exception as e:
+                logger.error(f"Error in market data streamer {stream_id}: {e}")
+                stream_config['error_count'] += 1
+                time.sleep(1)  # Wait before retrying
+                
+    except Exception as e:
+        logger.error(f"Fatal error in market data streamer {stream_id}: {e}")
+
+
+def get_websocket_status() -> Dict[str, Any]:
+    """Get status of all WebSocket connections."""
+    try:
+        with _connection_lock:
+            status = {
+                'total_connections': len(_websocket_connections),
+                'connections': {},
+                'websockets_available': WEBSOCKETS_AVAILABLE,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            for conn_id, config in _websocket_connections.items():
+                status['connections'][conn_id] = {
+                    'url': config['url'],
+                    'status': config['status'],
+                    'retry_count': config['retry_count'],
+                    'connected_at': config.get('connected_at'),
+                    'last_message': config.get('last_message')
+                }
+            
+            return status
+            
+    except Exception as e:
+        logger.error(f"Error getting WebSocket status: {e}")
+        return {'error': str(e)}
+
+
+def get_stream_status() -> Dict[str, Any]:
+    """Get status of all data streams."""
+    try:
+        with _connection_lock:
+            status = {
+                'total_streams': len(_stream_buffers),
+                'streams': {},
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            for stream_id, config in _stream_buffers.items():
+                status['streams'][stream_id] = {
+                    'symbols': config.get('symbols', []),
+                    'buffer_size': len(config.get('buffer', [])),
+                    'processed_count': config.get('processed_count', 0),
+                    'error_count': config.get('error_count', 0),
+                    'started_at': config.get('started_at'),
+                    'last_processed': config.get('last_processed')
+                }
+            
+            return status
+            
+    except Exception as e:
+        logger.error(f"Error getting stream status: {e}")
+        return {'error': str(e)}
