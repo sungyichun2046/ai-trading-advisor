@@ -1035,8 +1035,55 @@ class AnalysisEngine:
                 sentiment_bias = sentiment_results.get('sentiment_bias', 'neutral')
                 all_signals.append(sentiment_bias)
             
+            # Original consensus calculation (maintained for backward compatibility)
             consensus = self.calculate_comprehensive_consensus(timeframe_signals, all_signals)
             analysis_results["consensus"] = consensus
+            
+            # Enhanced Resonance Engine integration
+            try:
+                from .resonance_engine import ResonanceEngine
+                
+                # Prepare data for ResonanceEngine
+                resonance_data = {
+                    'timeframes': {}
+                }
+                
+                # Structure timeframe data for resonance analysis
+                for timeframe, tf_data in analysis_results["timeframe_analysis"].items():
+                    resonance_data['timeframes'][timeframe] = {
+                        'technical': tf_data.get('technical', {}),
+                        'patterns': tf_data.get('patterns', {}),
+                        'fundamental': analysis_results["fundamental_analysis"],
+                        'sentiment': analysis_results["sentiment_analysis"]
+                    }
+                
+                # Calculate resonance consensus
+                resonance_engine = ResonanceEngine()
+                resonance_consensus = resonance_engine.calculate_consensus(resonance_data)
+                
+                # Add enhanced consensus fields while maintaining backward compatibility
+                analysis_results["consensus"].update({
+                    'consensus_score': resonance_consensus.get('consensus_score', 0.5),
+                    'confidence_level': resonance_consensus.get('confidence_level', 'moderate'),
+                    'alignment_status': resonance_consensus.get('alignment_status', 'no_consensus'),
+                    'resonance_analysis': resonance_consensus
+                })
+                
+            except ImportError:
+                logger.warning("ResonanceEngine not available, using standard consensus only")
+                # Add fallback enhanced fields to maintain API consistency
+                analysis_results["consensus"].update({
+                    'consensus_score': consensus.get('agreement', 0.5),
+                    'confidence_level': 'moderate' if consensus.get('strength') == 'moderate' else 'low',
+                    'alignment_status': 'partially_aligned' if consensus.get('agreement', 0) > 0.5 else 'no_consensus'
+                })
+            except Exception as e:
+                logger.warning(f"Resonance Engine calculation failed: {e}, using fallback")
+                analysis_results["consensus"].update({
+                    'consensus_score': consensus.get('agreement', 0.5),
+                    'confidence_level': 'moderate',
+                    'alignment_status': 'no_consensus'
+                })
             
             return ensure_json_serializable(analysis_results)
             

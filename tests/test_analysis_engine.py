@@ -954,6 +954,234 @@ class TestEnhancedPatternDetection:
             assert isinstance(advanced_triangles, list)
 
 
+class TestResonanceEngine:
+    """Test ResonanceEngine and consensus integration functionality."""
+    
+    def setup_method(self):
+        """Set up test fixtures."""
+        try:
+            from src.core.resonance_engine import ResonanceEngine
+            self.resonance_engine = ResonanceEngine()
+        except ImportError:
+            self.resonance_engine = None
+        
+        # Create test multi-timeframe data
+        import pandas as pd
+        import numpy as np
+        
+        dates = pd.date_range('2024-01-01', periods=50, freq='1h')
+        base_prices = 100 + np.cumsum(np.random.randn(50) * 0.5)
+        
+        self.test_data = pd.DataFrame({
+            'Open': base_prices + np.random.randn(50) * 0.1,
+            'High': base_prices + abs(np.random.randn(50)) * 0.3,
+            'Low': base_prices - abs(np.random.randn(50)) * 0.3,
+            'Close': base_prices,
+            'Volume': np.random.randint(800000, 1200000, 50)
+        }, index=dates)
+        
+        # Ensure High >= Close >= Low
+        self.test_data['High'] = self.test_data[['Open', 'High', 'Close']].max(axis=1)
+        self.test_data['Low'] = self.test_data[['Open', 'Low', 'Close']].min(axis=1)
+        
+        self.multi_timeframe_data = {
+            'timeframes': {
+                '1h': {
+                    'technical': {
+                        'rsi': 65,
+                        'macd': {'crossover': 'bullish'},
+                        'bollinger': {'position': 'within_bands'},
+                        'trend': {'direction': 'bullish'}
+                    },
+                    'fundamental': {
+                        'pe_ratio': 18,
+                        'growth_score': 0.8
+                    },
+                    'sentiment': {
+                        'score': 0.3,
+                        'news_sentiment': 0.2
+                    }
+                },
+                '1d': {
+                    'technical': {
+                        'rsi': 58,
+                        'macd': {'crossover': 'neutral'},
+                        'bollinger': {'position': 'above_upper'},
+                        'trend': {'direction': 'bullish'}
+                    },
+                    'fundamental': {
+                        'pe_ratio': 18,
+                        'growth_score': 0.7
+                    },
+                    'sentiment': {
+                        'score': 0.25,
+                        'news_sentiment': 0.1
+                    }
+                }
+            }
+        }
+    
+    def test_resonance_engine_creation(self):
+        """Test ResonanceEngine creation and basic functionality."""
+        if self.resonance_engine is None:
+            pytest.skip("ResonanceEngine not available")
+        
+        # Test basic initialization
+        assert self.resonance_engine is not None
+        assert hasattr(self.resonance_engine, 'calculate_consensus')
+        assert hasattr(self.resonance_engine, 'consensus_threshold')
+        assert hasattr(self.resonance_engine, 'alignment_threshold')
+        
+        # Test configuration
+        config = {
+            'consensus_threshold': 0.8,
+            'alignment_threshold': 0.7,
+            'signal_weights': {'technical': 0.5, 'fundamental': 0.3, 'sentiment': 0.2}
+        }
+        
+        from src.core.resonance_engine import ResonanceEngine
+        configured_engine = ResonanceEngine(config)
+        assert configured_engine.consensus_threshold == 0.8
+        assert configured_engine.alignment_threshold == 0.7
+        assert configured_engine.signal_weights['technical'] == 0.5
+    
+    def test_consensus_integration(self):
+        """Test consensus calculation integration."""
+        if self.resonance_engine is None:
+            pytest.skip("ResonanceEngine not available")
+        
+        consensus = self.resonance_engine.calculate_consensus(self.multi_timeframe_data)
+        
+        # Check required fields
+        required_fields = [
+            'consensus_score', 'confidence_level', 'alignment_status',
+            'agreement_ratio', 'signal_count', 'timeframe_weights',
+            'signal_strengths', 'validation', 'timestamp'
+        ]
+        
+        for field in required_fields:
+            assert field in consensus, f"Missing consensus field: {field}"
+        
+        # Check field types and ranges
+        assert isinstance(consensus['consensus_score'], (int, float))
+        assert 0 <= consensus['consensus_score'] <= 1
+        assert consensus['confidence_level'] in ['very_high', 'high', 'moderate', 'low', 'very_low']
+        assert consensus['alignment_status'] in [
+            'fully_aligned', 'mostly_aligned', 'partially_aligned', 'conflicted', 'no_consensus'
+        ]
+        assert isinstance(consensus['agreement_ratio'], (int, float))
+        assert 0 <= consensus['agreement_ratio'] <= 1
+        assert isinstance(consensus['signal_count'], int)
+        assert consensus['signal_count'] >= 0
+    
+    def test_enhanced_multi_timeframe(self):
+        """Test enhanced multi-timeframe analysis with ResonanceEngine."""
+        # Test with AnalysisEngine integration
+        from src.core.analysis_engine import AnalysisEngine
+        
+        analysis_engine = AnalysisEngine()
+        
+        # Create test data for multiple timeframes
+        data_by_timeframe = {
+            '1h': self.test_data,
+            '1d': self.test_data.resample('1d').agg({
+                'Open': 'first',
+                'High': 'max',
+                'Low': 'min',
+                'Close': 'last',
+                'Volume': 'sum'
+            })
+        }
+        
+        # Run multi-timeframe analysis
+        result = analysis_engine.multi_timeframe_analysis('AAPL', data_by_timeframe)
+        
+        # Check basic structure is preserved (backward compatibility)
+        basic_fields = ['symbol', 'timestamp', 'timeframe_analysis', 'fundamental_analysis', 'sentiment_analysis', 'consensus']
+        for field in basic_fields:
+            assert field in result, f"Missing basic field: {field}"
+        
+        # Check enhanced consensus fields are added
+        consensus = result['consensus']
+        enhanced_fields = ['consensus_score', 'confidence_level', 'alignment_status']
+        for field in enhanced_fields:
+            assert field in consensus, f"Missing enhanced consensus field: {field}"
+        
+        # Check enhanced field types
+        assert isinstance(consensus['consensus_score'], (int, float))
+        assert 0 <= consensus['consensus_score'] <= 1
+        assert consensus['confidence_level'] in ['very_high', 'high', 'moderate', 'low', 'very_low']
+        assert consensus['alignment_status'] in [
+            'fully_aligned', 'mostly_aligned', 'partially_aligned', 'conflicted', 'no_consensus'
+        ]
+        
+        # Check original consensus fields still exist (backward compatibility)
+        original_fields = ['signal', 'strength', 'agreement', 'total_signals']
+        for field in original_fields:
+            assert field in consensus, f"Missing original consensus field: {field}"
+    
+    def test_signal_alignment(self):
+        """Test signal alignment assessment functionality."""
+        if self.resonance_engine is None:
+            pytest.skip("ResonanceEngine not available")
+        
+        # Test with aligned signals
+        aligned_data = {
+            'timeframes': {
+                '1h': {
+                    'technical': {
+                        'rsi': 75,  # Overbought (bearish)
+                        'macd': {'crossover': 'bearish'},
+                        'trend': {'direction': 'bearish'}
+                    },
+                    'sentiment': {'score': -0.3}  # Negative (bearish)
+                },
+                '1d': {
+                    'technical': {
+                        'rsi': 72,  # Overbought (bearish) 
+                        'macd': {'crossover': 'bearish'},
+                        'trend': {'direction': 'bearish'}
+                    },
+                    'sentiment': {'score': -0.25}  # Negative (bearish)
+                }
+            }
+        }
+        
+        aligned_consensus = self.resonance_engine.calculate_consensus(aligned_data)
+        
+        # Should show high alignment
+        assert aligned_consensus['alignment_status'] in ['fully_aligned', 'mostly_aligned']
+        assert aligned_consensus['agreement_ratio'] > 0.6
+        
+        # Test with conflicting signals
+        conflicted_data = {
+            'timeframes': {
+                '1h': {
+                    'technical': {
+                        'rsi': 25,  # Oversold (bullish)
+                        'macd': {'crossover': 'bullish'},
+                        'trend': {'direction': 'bullish'}
+                    },
+                    'sentiment': {'score': 0.3}  # Positive (bullish)
+                },
+                '1d': {
+                    'technical': {
+                        'rsi': 78,  # Overbought (bearish)
+                        'macd': {'crossover': 'bearish'},
+                        'trend': {'direction': 'bearish'}
+                    },
+                    'sentiment': {'score': -0.2}  # Negative (bearish)
+                }
+            }
+        }
+        
+        conflicted_consensus = self.resonance_engine.calculate_consensus(conflicted_data)
+        
+        # Should show conflict or low alignment
+        assert conflicted_consensus['alignment_status'] in ['conflicted', 'partially_aligned', 'no_consensus']
+        assert conflicted_consensus['agreement_ratio'] < 0.8
+
+
 # Run tests if executed directly
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
