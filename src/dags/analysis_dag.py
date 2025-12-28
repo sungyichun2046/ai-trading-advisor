@@ -1,10 +1,14 @@
 """
 Ultra-simple Analysis DAG - guaranteed to complete successfully
+Enhanced with dynamic dependency management.
 """
 
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
+
+# Import dependency manager for configuration-driven dependencies
+from src.utils.dependency_manager import setup_dag_dependencies
 
 # Simple DAG configuration
 dag = DAG(
@@ -188,41 +192,44 @@ def calculate_consensus_signals(**context):
     logger.info("Consensus signals calculation completed successfully")
     return result
 
-# Create tasks
-task1 = PythonOperator(
+# Create tasks with descriptive names
+analyze_technical_indicators = PythonOperator(
     task_id='analyze_technical_indicators',
     python_callable=simple_technical_analysis,
     dag=dag,
     execution_timeout=timedelta(seconds=10)
 )
 
-task2 = PythonOperator(
+analyze_fundamentals = PythonOperator(
     task_id='analyze_fundamentals',
     python_callable=simple_fundamental_analysis,
     dag=dag,
     execution_timeout=timedelta(seconds=10)
 )
 
-task3 = PythonOperator(
+analyze_sentiment = PythonOperator(
     task_id='analyze_sentiment',
     python_callable=simple_sentiment_analysis,
     dag=dag,
     execution_timeout=timedelta(seconds=10)
 )
 
-task4 = PythonOperator(
+monitor_analysis_systems_task = PythonOperator(
     task_id='monitor_analysis_systems',
     python_callable=monitor_analysis_systems,
     dag=dag,
     execution_timeout=timedelta(seconds=20)
 )
 
-task5 = PythonOperator(
+calculate_consensus_signals_task = PythonOperator(
     task_id='calculate_consensus_signals',
     python_callable=calculate_consensus_signals,
     dag=dag,
     execution_timeout=timedelta(seconds=15)
 )
 
-# Set dependencies - consensus task runs after all analysis tasks complete
-[task1, task2, task3] >> task5 >> task4
+# Set dependencies with descriptive task names - consensus task runs after all analysis tasks complete
+[analyze_technical_indicators, analyze_fundamentals, analyze_sentiment] >> calculate_consensus_signals_task >> monitor_analysis_systems_task
+
+# Apply dynamic dependency management using configuration
+dag = setup_dag_dependencies(dag, 'analysis')

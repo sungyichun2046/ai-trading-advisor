@@ -39,7 +39,7 @@ class TestAnalysisDAG:
         }
         
         assert expected_tasks.issubset(task_ids)
-        assert len(dag.tasks) == 5  # Enhanced structure with consensus
+        assert len(dag.tasks) == 9  # Enhanced with dependency management (skip, proceed, monitoring tasks)
 
 
 class TestAnalyzeTechnicalIndicators:

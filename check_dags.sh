@@ -4,15 +4,27 @@
 #
 # Steps:
 #   1. Test local DAG imports
-#   2. Copy DAGs to production location (src/airflow_dags/)
-#   3. Start production environment: docker compose up -d
-#   4. Wait for Airflow to be ready
-#   5. Run DAG tests + report results
+#   2. Validate dependency management configuration
+#   3. Copy DAGs to production location (src/airflow_dags/)
+#   4. Start production environment: docker compose up -d
+#   5. Wait for Airflow to be ready
+#   6. Run DAG tests + report results
 #
 # Uses docker-compose.yml (production environment)
 # Mounts ./src/airflow_dags → /opt/airflow/dags
+#
+# Usage:
+#   ./check_dags.sh                     # Standard DAG validation
+#   ./check_dags.sh --validate-dependencies  # Include dependency validation
 
 set -e
+
+# Check if dependency validation is requested
+VALIDATE_DEPENDENCIES=false
+if [[ "$1" == "--validate-dependencies" ]]; then
+    VALIDATE_DEPENDENCIES=true
+    echo "🔗 Dependency validation mode enabled"
+fi
 
 echo "🚀 DAG VALIDATION (PRODUCTION ENVIRONMENT)"
 echo "==========================================="
@@ -64,6 +76,107 @@ echo ""
 # Expected DAGs for streamlined structure (final goal: 3 DAGs)
 expected_dags=("data_collection" "analysis" "trading")
 found_dags=()
+
+# Dependency validation section (if requested)
+if [[ "$VALIDATE_DEPENDENCIES" == "true" ]]; then
+    echo "🔗 DEPENDENCY MANAGEMENT VALIDATION"
+    echo "===================================="
+    echo ""
+    
+    # Check for dependency configuration file
+    if [ ! -f "src/config/dag_dependencies.yaml" ]; then
+        echo "❌ ERROR: src/config/dag_dependencies.yaml not found!"
+        echo "   Dependency configuration file is missing"
+        exit 1
+    fi
+    echo "✅ Configuration file: src/config/dag_dependencies.yaml found"
+    
+    # Check for dependency manager module
+    if [ ! -f "src/utils/dependency_manager.py" ]; then
+        echo "❌ ERROR: src/utils/dependency_manager.py not found!"
+        echo "   DependencyManager module is missing"
+        exit 1
+    fi
+    echo "✅ Dependency manager: src/utils/dependency_manager.py found"
+    
+    # Test dependency manager import
+    echo ""
+    echo "🧪 Testing dependency manager import..."
+    dep_test=$(POSTGRES_HOST=localhost POSTGRES_DB=airflow POSTGRES_USER=airflow POSTGRES_PASSWORD=airflow venv/bin/python -c "
+import sys
+sys.path.append('$(pwd)')
+try:
+    from src.utils.dependency_manager import DependencyManager, setup_dag_dependencies, validate_dag_dependencies
+    print('✅ DependencyManager import successful')
+    
+    # Test initialization
+    dm = DependencyManager()
+    print('✅ DependencyManager initialization successful')
+    
+    # Test configuration loading
+    config = dm.config
+    if config and 'dags' in config:
+        print(f'✅ Configuration loaded: {len(config[\"dags\"])} DAGs configured')
+        for dag_id in config[\"dags\"]:
+            print(f'   - {dag_id}: {len(config[\"dags\"][dag_id].get(\"skip_conditions\", {}))} skip conditions')
+    else:
+        print('⚠️  Configuration loaded but no DAGs found')
+    
+    # Test validation for each expected DAG
+    for dag_id in ['data_collection', 'analysis', 'trading']:
+        try:
+            validation = validate_dag_dependencies(dag_id)
+            if validation['valid']:
+                print(f'✅ {dag_id} dependency validation: PASS')
+            else:
+                print(f'⚠️  {dag_id} dependency validation: {len(validation[\"errors\"])} errors')
+        except Exception as e:
+            print(f'❌ {dag_id} dependency validation failed: {e}')
+            
+except ImportError as e:
+    print(f'❌ Import failed: {e}')
+    exit(1)
+except Exception as e:
+    print(f'❌ Dependency manager test failed: {e}')
+    exit(1)
+" 2>&1)
+
+    if [ $? -eq 0 ]; then
+        echo "$dep_test"
+    else
+        echo "❌ DEPENDENCY VALIDATION FAILED"
+        echo "$dep_test"
+        exit 1
+    fi
+    echo ""
+    
+    # Test DAG modifications for dependency manager integration
+    echo "🔍 Checking DAG integration with dependency manager..."
+    for dag_file in $dag_files; do
+        dag_name=$(basename "$dag_file" .py | sed 's/_dag$//')
+        
+        # Check if DAG imports dependency manager
+        if grep -q "from src.utils.dependency_manager import setup_dag_dependencies" "$dag_file"; then
+            echo "✅ $dag_name: dependency manager import found"
+        else
+            echo "❌ $dag_name: missing dependency manager import"
+            exit 1
+        fi
+        
+        # Check if DAG calls setup_dag_dependencies
+        if grep -q "setup_dag_dependencies(dag," "$dag_file"; then
+            echo "✅ $dag_name: dependency setup call found"
+        else
+            echo "❌ $dag_name: missing dependency setup call"
+            exit 1
+        fi
+    done
+    echo ""
+    
+    echo "✅ DEPENDENCY VALIDATION COMPLETE"
+    echo "=================================="
+    echo ""
+fi
 
 echo "🧪 TESTING DAG IMPORTS (LOCAL)"
 echo "============================="

@@ -1,10 +1,14 @@
 """
 Ultra-simple Data Collection DAG - guaranteed to complete successfully
+Enhanced with dynamic dependency management.
 """
 
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
+
+# Import dependency manager for configuration-driven dependencies
+from src.utils.dependency_manager import setup_dag_dependencies
 
 # Simple DAG configuration
 dag = DAG(
@@ -114,34 +118,37 @@ def monitor_data_systems(**context):
         context['task_instance'].xcom_push(key='monitoring_results', value=fallback_result)
         return fallback_result
 
-# Create tasks
-task1 = PythonOperator(
+# Create tasks with descriptive names
+collect_market_data = PythonOperator(
     task_id='collect_market_data',
     python_callable=simple_collect_market_data,
     dag=dag,
     execution_timeout=timedelta(seconds=10)
 )
 
-task2 = PythonOperator(
+collect_fundamental_data = PythonOperator(
     task_id='collect_fundamental_data', 
     python_callable=simple_collect_fundamental_data,
     dag=dag,
     execution_timeout=timedelta(seconds=10)
 )
 
-task3 = PythonOperator(
+collect_sentiment_data = PythonOperator(
     task_id='collect_sentiment_data',
     python_callable=simple_collect_sentiment,
     dag=dag,
     execution_timeout=timedelta(seconds=10)
 )
 
-task4 = PythonOperator(
+monitor_data_systems_task = PythonOperator(
     task_id='monitor_data_systems',
     python_callable=monitor_data_systems,
     dag=dag,
     execution_timeout=timedelta(seconds=20)
 )
 
-# Set dependencies
-task1 >> task2 >> task3 >> task4
+# Set dependencies with descriptive task names
+collect_market_data >> collect_fundamental_data >> collect_sentiment_data >> monitor_data_systems_task
+
+# Apply dynamic dependency management using configuration
+dag = setup_dag_dependencies(dag, 'data_collection')

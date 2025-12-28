@@ -42,7 +42,7 @@ class TestTradingDAG:
         }
         
         assert expected_tasks.issubset(task_ids)
-        assert len(dag.tasks) == 4  # Simple structure with monitoring
+        assert len(dag.tasks) == 8  # Enhanced with dependency management (skip, proceed, monitoring tasks)
 
 
 class TestGenerateTradingSignals:
@@ -166,8 +166,8 @@ class TestTradingDAGIntegration:
         # Get task dependency mapping
         task_dict = {task.task_id: task for task in dag.tasks}
         
-        # Check generate_trading_signals has no upstream dependencies
-        assert len(task_dict['generate_trading_signals'].upstream_task_ids) == 0
+        # Check generate_trading_signals depends on trading_proceed (from dependency manager)
+        assert 'trading_proceed' in task_dict['generate_trading_signals'].upstream_task_ids
         
         # Check assess_portfolio_risk depends on generate_trading_signals
         assert 'generate_trading_signals' in task_dict['assess_portfolio_risk'].upstream_task_ids
@@ -178,12 +178,13 @@ class TestTradingDAGIntegration:
         
         # Check monitor_trading_systems dependency
         monitor_upstream = task_dict['monitor_trading_systems'].upstream_task_ids
-        # Monitoring may depend on execute_paper_trades
-        assert len(monitor_upstream) <= 1
+        # Monitoring depends on execute_paper_trades and trading_proceed (from dependency manager)
+        assert 'execute_paper_trades' in monitor_upstream
+        assert len(monitor_upstream) >= 1  # May have additional dependencies from dependency manager
     
     def test_dag_task_count(self):
-        """Test DAG has exactly 4 tasks."""
-        assert len(dag.tasks) == 4  # Simple structure with monitoring
+        """Test DAG has exactly 8 tasks (enhanced with dependency management)."""
+        assert len(dag.tasks) == 8  # Enhanced with dependency management (skip, proceed, monitoring tasks)
     
     def test_dag_schedule_weekdays_only(self):
         """Test DAG is scheduled for manual trigger only."""

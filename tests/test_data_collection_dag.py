@@ -42,7 +42,7 @@ class TestDataCollectionDAG:
         }
         
         assert expected_tasks.issubset(task_ids)
-        assert len(dag.tasks) == 4  # Simple structure with monitoring
+        assert len(dag.tasks) == 8  # Enhanced with dependency management (skip, proceed, monitoring tasks)
 
 
 class TestCollectMarketData:

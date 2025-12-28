@@ -1,10 +1,14 @@
 """
 Ultra-simple Trading DAG - guaranteed to complete successfully
+Enhanced with dynamic dependency management.
 """
 
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
+
+# Import dependency manager for configuration-driven dependencies
+from src.utils.dependency_manager import setup_dag_dependencies
 
 # Simple DAG configuration
 dag = DAG(
@@ -111,34 +115,37 @@ def monitor_trading_systems(**context):
         context['task_instance'].xcom_push(key='trading_monitoring', value=fallback_result)
         return fallback_result
 
-# Create tasks
-task1 = PythonOperator(
+# Create tasks with descriptive names
+generate_trading_signals = PythonOperator(
     task_id='generate_trading_signals',
     python_callable=simple_generate_signals,
     dag=dag,
     execution_timeout=timedelta(seconds=10)
 )
 
-task2 = PythonOperator(
+assess_portfolio_risk = PythonOperator(
     task_id='assess_portfolio_risk',
     python_callable=simple_assess_risk,
     dag=dag,
     execution_timeout=timedelta(seconds=10)
 )
 
-task3 = PythonOperator(
+execute_paper_trades = PythonOperator(
     task_id='execute_paper_trades',
     python_callable=simple_execute_trades,
     dag=dag,
     execution_timeout=timedelta(seconds=10)
 )
 
-task4 = PythonOperator(
+monitor_trading_systems_task = PythonOperator(
     task_id='monitor_trading_systems',
     python_callable=monitor_trading_systems,
     dag=dag,
     execution_timeout=timedelta(seconds=20)
 )
 
-# Set dependencies  
-task1 >> task2 >> task3 >> task4
+# Set dependencies with descriptive task names
+generate_trading_signals >> assess_portfolio_risk >> execute_paper_trades >> monitor_trading_systems_task
+
+# Apply dynamic dependency management using configuration
+dag = setup_dag_dependencies(dag, 'trading')
