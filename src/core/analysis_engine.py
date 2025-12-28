@@ -65,9 +65,11 @@ class TechnicalAnalyzer:
                 indicators['indicators'].update({
                     'rsi': self.calculate_rsi(data['Close']),
                     'macd': self.calculate_macd(data['Close']),
-                    'bollinger': self.calculate_bollinger_bands(data['Close']),
+                    'bollinger': self.calculate_bollinger_bands(data),
                     'returns': calculate_returns(prices, 1),
-                    'trend': self.detect_trend(data)
+                    'trend': self.detect_trend(data),
+                    'candlestick_patterns': self.detect_candlestick_patterns(data),
+                    'bollinger_squeeze': self.bollinger_squeeze_detection(data)
                 })
                 
             if 'Volume' in data.columns:
@@ -121,25 +123,54 @@ class TechnicalAnalyzer:
         except Exception:
             return {"crossover": "neutral", "histogram": 0.0}
     
-    def calculate_bollinger_bands(self, prices: pd.Series, period: int = 20, std: float = 2.0) -> Dict[str, Any]:
-        """Calculate Bollinger Bands (simplified)."""
-        if len(prices) < period:
-            return {"position": "neutral", "bandwidth": 0.0}
-        
+    def calculate_bollinger_bands(self, data: pd.DataFrame, std: float = 2.0) -> Dict[str, Any]:
+        """Enhanced Bollinger Bands with adaptive periods based on volatility."""
         try:
-            sma = prices.rolling(window=period).mean()
-            rolling_std = prices.rolling(window=period).std()
+            from ..utils.shared import calculate_adaptive_period, calculate_returns
+            
+            if 'Close' not in data.columns or len(data) < 20:
+                return {"position": "neutral", "bandwidth": 0.0, "period": 20, "squeeze": False}
+            
+            prices = data['Close']
+            returns = calculate_returns(prices.tolist(), 1)
+            volatility = np.std(returns) if returns else 0.15
+            adaptive_period = calculate_adaptive_period(volatility)
+            adaptive_period = min(adaptive_period, len(prices)) if adaptive_period > len(prices) else adaptive_period
+            
+            # Calculate Bollinger Bands with adaptive period
+            sma = prices.rolling(window=adaptive_period).mean()
+            rolling_std = prices.rolling(window=adaptive_period).std()
+            upper_band = sma + (rolling_std * std)
+            lower_band = sma - (rolling_std * std)
+            
             current_price = prices.iloc[-1]
+            current_upper = upper_band.iloc[-1] if not upper_band.empty else current_price
+            current_lower = lower_band.iloc[-1] if not lower_band.empty else current_price
             current_sma = sma.iloc[-1] if not sma.empty else current_price
+            current_std = rolling_std.iloc[-1] if not rolling_std.empty else 0
             
-            # Simplified position determination
-            position = "above_upper" if current_price > current_sma * 1.02 else "below_lower" if current_price < current_sma * 0.98 else "within_bands"
-            bandwidth = (rolling_std.iloc[-1] / current_sma) * 100 if current_sma > 0 else 0.0
+            # Position determination
+            position = "above_upper" if current_price > current_upper else "below_lower" if current_price < current_lower else "within_bands"
             
-            return {"position": position, "bandwidth": round(bandwidth, 2)}
+            # Band position and bandwidth
+            band_range = current_upper - current_lower
+            band_position = (current_price - current_lower) / band_range if band_range > 0 else 0.5
+            bandwidth = (current_std / current_sma) * 100 if current_sma > 0 else 0.0
             
-        except Exception:
-            return {"position": "neutral", "bandwidth": 0.0}
+            return {
+                "position": position,
+                "bandwidth": round(bandwidth, 2),
+                "band_position": round(band_position, 3),
+                "period": adaptive_period,
+                "upper_band": round(current_upper, 2),
+                "lower_band": round(current_lower, 2),
+                "middle_band": round(current_sma, 2),
+                "squeeze": bandwidth < 10.0
+            }
+            
+        except Exception as e:
+            logger.warning(f"Bollinger Bands calculation failed: {e}")
+            return {"position": "neutral", "bandwidth": 0.0, "period": 20, "squeeze": False}
     
     def detect_trend(self, data: pd.DataFrame) -> Dict[str, Any]:
         """Simplified trend detection."""
@@ -190,6 +221,140 @@ class TechnicalAnalyzer:
             
         except Exception:
             return {"trend": "unknown", "relative_volume": 1.0, "volume_pattern": "none"}
+    
+    def detect_candlestick_patterns(self, data: pd.DataFrame) -> Dict[str, Any]:
+        """Detect major classical and advanced candlestick patterns."""
+        try:
+            if not all(col in data.columns for col in ['Open', 'High', 'Low', 'Close']) or len(data) < 3:
+                return {"patterns": [], "current_signal": "neutral", "pattern_count": 0}
+            
+            patterns_detected = []
+            recent_data = data.tail(5)
+            
+            for i in range(1, len(recent_data)):
+                current = recent_data.iloc[i]
+                prev = recent_data.iloc[i-1] if i >= 1 else None
+                
+                # Candlestick properties
+                body = abs(current['Close'] - current['Open'])
+                total_range = current['High'] - current['Low']
+                body_ratio = body / total_range if total_range > 0 else 0
+                upper_shadow = current['High'] - max(current['Open'], current['Close'])
+                lower_shadow = min(current['Open'], current['Close']) - current['Low']
+                
+                # Single candle patterns
+                if body_ratio < 0.1:  # Doji
+                    patterns_detected.append({"name": "doji", "signal": "neutral", "strength": 0.6})
+                elif lower_shadow > body * 2 and upper_shadow < body:  # Hammer/Hanging Man
+                    signal = "bullish" if current['Close'] > prev['Close'] else "bearish"
+                    name = "hammer" if signal == "bullish" else "hanging_man"
+                    patterns_detected.append({"name": name, "signal": signal, "strength": 0.7})
+                elif upper_shadow > body * 2 and lower_shadow < body:  # Shooting Star/Inverted Hammer
+                    signal = "bearish" if current['Close'] < prev['Close'] else "bullish"
+                    name = "shooting_star" if signal == "bearish" else "inverted_hammer"
+                    patterns_detected.append({"name": name, "signal": signal, "strength": 0.7})
+                elif body_ratio > 0.8:  # Marubozu
+                    signal = "bullish" if current['Close'] > current['Open'] else "bearish"
+                    patterns_detected.append({"name": f"{signal}_marubozu", "signal": signal, "strength": 0.8})
+                
+                # Multi-candle patterns (engulfing)
+                if prev is not None and i >= 1:
+                    if (current['Close'] > current['Open'] and prev['Close'] < prev['Open'] and
+                        current['Close'] > prev['Open'] and current['Open'] < prev['Close']):
+                        patterns_detected.append({"name": "bullish_engulfing", "signal": "bullish", "strength": 0.8})
+                    elif (current['Close'] < current['Open'] and prev['Close'] > prev['Open'] and
+                          current['Close'] < prev['Open'] and current['Open'] > prev['Close']):
+                        patterns_detected.append({"name": "bearish_engulfing", "signal": "bearish", "strength": 0.8})
+            
+            # Calculate signal consensus
+            bullish_count = sum(1 for p in patterns_detected if p['signal'] == 'bullish')
+            bearish_count = sum(1 for p in patterns_detected if p['signal'] == 'bearish')
+            current_signal = "bullish" if bullish_count > bearish_count else "bearish" if bearish_count > bullish_count else "neutral"
+            
+            return {
+                "patterns": patterns_detected,
+                "current_signal": current_signal,
+                "pattern_count": len(patterns_detected),
+                "bullish_count": bullish_count,
+                "bearish_count": bearish_count
+            }
+            
+        except Exception as e:
+            logger.warning(f"Candlestick pattern detection failed: {e}")
+            return {"patterns": [], "current_signal": "neutral", "pattern_count": 0}
+    
+    def bollinger_squeeze_detection(self, data: pd.DataFrame) -> Dict[str, Any]:
+        """Detect Bollinger Band squeeze using multi-factor normalized signals."""
+        try:
+            from ..utils.shared import normalize_signals
+            
+            if not all(col in data.columns for col in ['High', 'Low', 'Close']) or len(data) < 20:
+                return {"squeeze_active": False, "squeeze_strength": 0.0, "breakout_direction": "none"}
+            
+            bb_data = self.calculate_bollinger_bands(data)
+            bandwidth = bb_data.get('bandwidth', 0)
+            prices = data['Close']
+            atr = self._calculate_atr(data, period=14)
+            volatility = prices.rolling(20).std().iloc[-1] if len(prices) >= 20 else 0
+            
+            # Multi-factor squeeze signals
+            signals = {
+                'bandwidth': max(0, 20 - bandwidth),
+                'atr_ratio': max(0, 10 - (atr / prices.iloc[-1] * 100)) if prices.iloc[-1] > 0 else 0,
+                'volatility_factor': max(0, 5 - (volatility / prices.mean() * 100)) if prices.mean() > 0 else 0
+            }
+            
+            normalized = normalize_signals(signals)
+            squeeze_strength = sum(normalized.values()) / len(normalized)
+            squeeze_active = squeeze_strength > 0.6
+            
+            # Determine breakout direction
+            if squeeze_active:
+                bb_middle = bb_data.get('middle_band', prices.mean())
+                current_price = prices.iloc[-1]
+                if current_price > bb_middle:
+                    breakout_direction = "bullish_potential"
+                elif current_price < bb_middle:
+                    breakout_direction = "bearish_potential"
+                else:
+                    breakout_direction = "neutral"
+            else:
+                breakout_direction = "none"
+            
+            return {
+                "squeeze_active": squeeze_active,
+                "squeeze_strength": round(squeeze_strength, 3),
+                "breakout_direction": breakout_direction,
+                "bandwidth": bandwidth,
+                "atr": round(atr, 2),
+                "factors": {k: round(v, 3) for k, v in normalized.items()}
+            }
+            
+        except Exception as e:
+            logger.warning(f"Bollinger squeeze detection failed: {e}")
+            return {"squeeze_active": False, "squeeze_strength": 0.0, "breakout_direction": "none"}
+    
+    def _calculate_atr(self, data: pd.DataFrame, period: int = 14) -> float:
+        """Calculate Average True Range for volatility measurement."""
+        try:
+            if len(data) < period or not all(col in data.columns for col in ['High', 'Low', 'Close']):
+                return 1.0
+            
+            high = data['High']
+            low = data['Low']
+            close = data['Close'].shift(1)
+            
+            tr1 = high - low
+            tr2 = abs(high - close)
+            tr3 = abs(low - close)
+            
+            true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+            atr = true_range.rolling(window=period).mean().iloc[-1]
+            
+            return float(atr) if not pd.isna(atr) else 1.0
+            
+        except Exception:
+            return 1.0
 
 
 class PatternAnalyzer:

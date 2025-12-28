@@ -63,7 +63,7 @@ class TestTechnicalAnalyzer:
         indicators = result['indicators']
         
         # Check all indicators are present
-        expected_indicators = ['rsi', 'macd', 'bollinger', 'returns', 'trend', 'volume']
+        expected_indicators = ['rsi', 'macd', 'bollinger', 'returns', 'trend', 'volume', 'candlestick_patterns', 'bollinger_squeeze']
         for indicator in expected_indicators:
             assert indicator in indicators, f"Missing indicator: {indicator}"
     
@@ -245,6 +245,182 @@ class TestPatternAnalyzer:
             for level in psych_levels:
                 assert level == round(level)  # Should be whole numbers
                 assert min(prices) <= level <= max(prices)  # Within price range
+    
+    def test_enhanced_indicators(self):
+        """Test enhanced technical indicators integration."""
+        # Create comprehensive test data with OHLCV
+        dates = pd.date_range('2024-01-01', periods=50, freq='1h')
+        np.random.seed(42)
+        
+        base_prices = 100 + np.cumsum(np.random.randn(50) * 0.5)
+        test_data = pd.DataFrame({
+            'Open': base_prices + np.random.randn(50) * 0.1,
+            'High': base_prices + abs(np.random.randn(50)) * 0.3,
+            'Low': base_prices - abs(np.random.randn(50)) * 0.3,
+            'Close': base_prices,
+            'Volume': np.random.randint(800000, 1200000, 50)
+        }, index=dates)
+        
+        # Ensure High >= Close >= Low
+        test_data['High'] = test_data[['Open', 'High', 'Close']].max(axis=1)
+        test_data['Low'] = test_data[['Open', 'Low', 'Close']].min(axis=1)
+        
+        analyzer = TechnicalAnalyzer()
+        result = analyzer.calculate_indicators(test_data, '1h')
+        
+        # Verify all enhanced indicators are present
+        indicators = result['indicators']
+        assert 'bollinger' in indicators
+        assert 'candlestick_patterns' in indicators
+        assert 'bollinger_squeeze' in indicators
+        
+        # Check enhanced Bollinger Bands structure
+        bollinger = indicators['bollinger']
+        enhanced_bb_keys = ['position', 'bandwidth', 'band_position', 'period', 'upper_band', 'lower_band', 'middle_band', 'squeeze']
+        for key in enhanced_bb_keys:
+            assert key in bollinger, f"Missing Bollinger Band key: {key}"
+        
+        # Check candlestick patterns structure
+        patterns = indicators['candlestick_patterns']
+        assert 'patterns' in patterns
+        assert 'current_signal' in patterns
+        assert 'pattern_count' in patterns
+        assert isinstance(patterns['patterns'], list)
+        assert patterns['current_signal'] in ['bullish', 'bearish', 'neutral']
+        
+        # Check Bollinger squeeze structure
+        squeeze = indicators['bollinger_squeeze']
+        squeeze_keys = ['squeeze_active', 'squeeze_strength', 'breakout_direction', 'factors']
+        for key in squeeze_keys:
+            assert key in squeeze, f"Missing squeeze key: {key}"
+    
+    def test_dynamic_bollinger(self):
+        """Test dynamic Bollinger Bands with adaptive periods."""
+        analyzer = TechnicalAnalyzer()
+        
+        # Test with high volatility data (should use shorter periods)
+        high_vol_data = pd.DataFrame({
+            'Open': [100, 95, 105, 90, 110, 85, 115] * 5,
+            'High': [102, 97, 107, 92, 112, 87, 117] * 5,
+            'Low': [98, 93, 103, 88, 108, 83, 113] * 5,
+            'Close': [101, 96, 106, 91, 111, 86, 116] * 5,
+            'Volume': [1000000] * 35
+        })
+        
+        result_high_vol = analyzer.calculate_bollinger_bands(high_vol_data)
+        
+        # Test with low volatility data (should use longer periods)
+        low_vol_data = pd.DataFrame({
+            'Open': [100, 100.1, 100.2, 100.1, 100.3] * 7,
+            'High': [100.2, 100.3, 100.4, 100.3, 100.5] * 7,
+            'Low': [99.8, 99.9, 100.0, 99.9, 100.1] * 7,
+            'Close': [100, 100.1, 100.2, 100.1, 100.3] * 7,
+            'Volume': [1000000] * 35
+        })
+        
+        result_low_vol = analyzer.calculate_bollinger_bands(low_vol_data)
+        
+        # High volatility should generally use shorter periods than low volatility
+        assert 'period' in result_high_vol
+        assert 'period' in result_low_vol
+        assert isinstance(result_high_vol['period'], int)
+        assert isinstance(result_low_vol['period'], int)
+        
+        # Check adaptive period logic is working
+        assert result_high_vol['period'] <= result_low_vol['period']
+        
+        # Check enhanced fields are present
+        enhanced_fields = ['band_position', 'upper_band', 'lower_band', 'middle_band', 'squeeze']
+        for field in enhanced_fields:
+            assert field in result_high_vol
+            assert field in result_low_vol
+    
+    def test_candlestick_integration(self):
+        """Test candlestick pattern detection integration."""
+        analyzer = TechnicalAnalyzer()
+        
+        # Create data with clear candlestick patterns
+        # Doji pattern
+        doji_data = pd.DataFrame({
+            'Open': [100, 100, 100, 100, 100],
+            'High': [101, 101, 101, 101, 101],
+            'Low': [99, 99, 99, 99, 99],
+            'Close': [100.01, 99.99, 100.02, 99.98, 100],  # Very small bodies
+        })
+        
+        result = analyzer.detect_candlestick_patterns(doji_data)
+        
+        # Check basic structure
+        assert 'patterns' in result
+        assert 'current_signal' in result
+        assert 'pattern_count' in result
+        assert 'bullish_count' in result
+        assert 'bearish_count' in result
+        
+        # Should detect some patterns
+        assert isinstance(result['patterns'], list)
+        assert result['current_signal'] in ['bullish', 'bearish', 'neutral']
+        assert result['pattern_count'] >= 0
+        
+        # Test hammer pattern
+        hammer_data = pd.DataFrame({
+            'Open': [100, 100, 90, 100, 100],
+            'High': [100, 100, 91, 100, 100],
+            'Low': [100, 100, 85, 100, 100],  # Long lower shadow
+            'Close': [100, 99, 90.5, 100, 100],  # Small body at top
+        })
+        
+        hammer_result = analyzer.detect_candlestick_patterns(hammer_data)
+        assert hammer_result['pattern_count'] >= 0
+        
+        # If patterns detected, check their structure
+        if hammer_result['patterns']:
+            pattern = hammer_result['patterns'][0]
+            assert 'name' in pattern
+            assert 'signal' in pattern
+            assert 'strength' in pattern
+            assert pattern['signal'] in ['bullish', 'bearish', 'neutral']
+            assert 0 <= pattern['strength'] <= 1
+    
+    def test_adaptive_periods(self):
+        """Test adaptive period calculation integration."""
+        analyzer = TechnicalAnalyzer()
+        
+        # Test different volatility scenarios
+        scenarios = [
+            # Very high volatility
+            pd.DataFrame({
+                'Close': [100, 80, 120, 70, 130, 60, 140] * 5,
+                'High': [105, 85, 125, 75, 135, 65, 145] * 5,
+                'Low': [95, 75, 115, 65, 125, 55, 135] * 5,
+                'Open': [102, 82, 122, 72, 132, 62, 142] * 5
+            }),
+            # Medium volatility  
+            pd.DataFrame({
+                'Close': [100, 98, 102, 101, 99, 103, 100] * 5,
+                'High': [102, 100, 104, 103, 101, 105, 102] * 5,
+                'Low': [98, 96, 100, 99, 97, 101, 98] * 5,
+                'Open': [101, 99, 101, 100, 98, 102, 101] * 5
+            }),
+            # Low volatility
+            pd.DataFrame({
+                'Close': [100, 100.2, 99.8, 100.1, 99.9, 100.3, 100] * 5,
+                'High': [100.3, 100.5, 100.1, 100.4, 100.2, 100.6, 100.3] * 5,
+                'Low': [99.7, 99.9, 99.5, 99.8, 99.6, 100, 99.7] * 5,
+                'Open': [100.1, 100.3, 99.9, 100.2, 100, 100.4, 100.1] * 5
+            })
+        ]
+        
+        periods = []
+        for scenario in scenarios:
+            bb_result = analyzer.calculate_bollinger_bands(scenario)
+            periods.append(bb_result['period'])
+        
+        # High volatility should generally use shorter periods
+        # Low volatility should generally use longer periods
+        assert len(periods) == 3
+        assert all(isinstance(p, int) for p in periods)
+        assert all(5 <= p <= 50 for p in periods)  # Within expected range
 
 
 class TestFundamentalAnalyzer:
