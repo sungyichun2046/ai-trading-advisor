@@ -43,16 +43,17 @@ services:
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
       AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
       AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth'
+      PYTHONPATH: '/opt/airflow'
       _AIRFLOW_DB_UPGRADE: 'true'
       _AIRFLOW_WWW_USER_CREATE: 'true' 
       _AIRFLOW_WWW_USER_USERNAME: admin
       _AIRFLOW_WWW_USER_PASSWORD: admin
     volumes:
-      - ./src/airflow_dags:/opt/airflow/dags:ro
+      - ./src/dags:/opt/airflow/dags:ro
       - ./src:/opt/airflow/src:ro
       - airflow_logs:/opt/airflow/logs
     ports:
-      - "8080:8080"
+      - "${AIRFLOW_PORT:-8080}:8080"  # Use 8081 for tests, 8080 for production
     command: webserver
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
@@ -72,8 +73,9 @@ services:
       AIRFLOW__CORE__FERNET_KEY: ''
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
       AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      PYTHONPATH: '/opt/airflow'
     volumes:
-      - ./src/airflow_dags:/opt/airflow/dags:ro
+      - ./src/dags:/opt/airflow/dags:ro
       - ./src:/opt/airflow/src:ro
       - airflow_logs:/opt/airflow/logs
     command: scheduler

@@ -238,9 +238,21 @@ class CacheManager:
             
             # Check TTL
             if key in self.memory_ttls:
-                expiry_time = self.memory_timestamps.get(key, 0) + self.memory_ttls[key]
-                if time.time() > expiry_time:
-                    # Expired, remove from cache
+                try:
+                    timestamp = float(self.memory_timestamps.get(key, 0))
+                    ttl = int(self.memory_ttls[key])
+                    current_time = float(time.time())
+                    expiry_time = timestamp + ttl
+                    
+                    if current_time > expiry_time:
+                        # Expired, remove from cache
+                        self.memory_cache.pop(key, None)
+                        self.memory_timestamps.pop(key, None)
+                        self.memory_ttls.pop(key, None)
+                        return None
+                except (TypeError, ValueError) as e:
+                    logger.warning(f"Cache TTL check issue for key {key}: {e}, removing entry")
+                    # Remove problematic entry
                     self.memory_cache.pop(key, None)
                     self.memory_timestamps.pop(key, None)
                     self.memory_ttls.pop(key, None)
@@ -255,14 +267,27 @@ class CacheManager:
             while len(self.memory_cache) >= self.max_memory_size:
                 if not self.memory_timestamps:
                     break
-                oldest_key = min(self.memory_timestamps.keys(), key=lambda k: self.memory_timestamps[k])
+                try:
+                    # Ensure all timestamps are numeric before comparison
+                    valid_timestamps = {k: float(v) for k, v in self.memory_timestamps.items() 
+                                      if isinstance(v, (int, float, str)) and str(v).replace('.', '', 1).isdigit()}
+                    if valid_timestamps:
+                        oldest_key = min(valid_timestamps.keys(), key=lambda k: valid_timestamps[k])
+                    else:
+                        # Fallback: remove the first key
+                        oldest_key = next(iter(self.memory_timestamps.keys()))
+                except (TypeError, ValueError) as e:
+                    logger.warning(f"Cache cleanup issue: {e}, clearing problematic entries")
+                    # Clear problematic entries and continue
+                    oldest_key = next(iter(self.memory_timestamps.keys()))
+                
                 self.memory_cache.pop(oldest_key, None)
                 self.memory_timestamps.pop(oldest_key, None) 
                 self.memory_ttls.pop(oldest_key, None)
             
             self.memory_cache[key] = value
-            self.memory_timestamps[key] = time.time()
-            self.memory_ttls[key] = ttl
+            self.memory_timestamps[key] = float(time.time())
+            self.memory_ttls[key] = int(ttl)
     
     def _get_from_redis(self, key: str) -> Any:
         """Get value from L2 Redis cache."""
@@ -313,10 +338,33 @@ def get_cache_manager() -> CacheManager:
         try:
             from .config_loader import get_cache_config
             config = get_cache_config()
+            # Parse numeric values from config, handling string formats
+            default_ttl = config.get('default_ttl', 3600)
+            max_memory_size = config.get('max_memory_size', 1000)
+            
+            # Convert TTL to int
+            try:
+                default_ttl = int(default_ttl)
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid default_ttl '{default_ttl}', using 3600")
+                default_ttl = 3600
+            
+            # Convert memory size to int, handle suffixes like "100MB"
+            try:
+                if isinstance(max_memory_size, str):
+                    # Remove common suffixes and extract numeric part
+                    size_str = max_memory_size.upper().replace('MB', '').replace('KB', '').replace('GB', '').strip()
+                    max_memory_size = int(size_str)
+                else:
+                    max_memory_size = int(max_memory_size)
+            except (ValueError, TypeError):
+                logger.warning(f"Invalid max_memory_size '{max_memory_size}', using 1000")
+                max_memory_size = 1000
+            
             cache_manager = CacheManager(
                 redis_url=config.get('redis_url'),
-                default_ttl=config.get('default_ttl', 3600),
-                max_memory_size=config.get('max_memory_size', 1000)
+                default_ttl=default_ttl,
+                max_memory_size=max_memory_size
             )
         except Exception as e:
             logger.warning(f"Failed to initialize cache manager with config: {e}")

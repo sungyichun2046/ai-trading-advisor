@@ -20,6 +20,79 @@ AI-powered trading advisor with dynamic risk management, multi-source data integ
 - Docker & Docker Compose
 - Git
 
+### 🗄️ Database Access
+
+The application uses PostgreSQL as the main database. Here's how to access it:
+
+#### **Local PostgreSQL Access**
+
+**Connection Details:**
+```bash
+Host: localhost
+Port: 5432
+Database: airflow
+Username: airflow
+Password: airflow
+```
+
+**Command Line Access:**
+```bash
+# Using psql (if PostgreSQL client installed)
+psql -h localhost -p 5432 -U airflow -d airflow
+
+# Using Docker exec to access container
+docker compose exec postgres psql -U airflow -d airflow
+
+# One-liner to check database tables
+docker compose exec postgres psql -U airflow -d airflow -c "\dt"
+```
+
+**GUI Tools (pgAdmin, DBeaver, etc.):**
+```
+Host: localhost
+Port: 5432
+Database: airflow
+Username: airflow
+Password: airflow
+```
+
+#### **Database Tables**
+
+The application creates these main tables:
+- `market_data` - Stock price and volume data
+- `news_data` - News articles with sentiment analysis
+- Airflow tables (dag_run, task_instance, etc.)
+
+**Example Queries:**
+```sql
+-- View recent market data
+SELECT * FROM market_data ORDER BY timestamp DESC LIMIT 10;
+
+-- View news sentiment
+SELECT title, sentiment_score, sentiment_label FROM news_data ORDER BY published_at DESC LIMIT 10;
+
+-- Check DAG run status
+SELECT dag_id, state, start_date FROM dag_run ORDER BY start_date DESC LIMIT 10;
+```
+
+#### **Database Management**
+
+```bash
+# Create database tables (if needed)
+POSTGRES_HOST=localhost POSTGRES_DB=airflow POSTGRES_USER=airflow POSTGRES_PASSWORD=airflow \
+python -c "from src.core.data_manager import DataManager; DataManager().create_tables()"
+
+# Test database connection
+POSTGRES_HOST=localhost POSTGRES_DB=airflow POSTGRES_USER=airflow POSTGRES_PASSWORD=airflow \
+python -c "from src.core.data_manager import DataManager; print(DataManager().health_check())"
+
+# Backup database
+docker compose exec postgres pg_dump -U airflow airflow > backup.sql
+
+# Restore database
+docker compose exec -T postgres psql -U airflow -d airflow < backup.sql
+```
+
 ### **⚡ Quick Verification Checklist**
 
 ```bash
