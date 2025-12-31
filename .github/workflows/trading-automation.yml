@@ -1,0 +1,158 @@
+name: Trading DAG Automation (PRODUCTION)
+
+on:
+  push:
+    branches:
+      - main  # or your target branch
+  # 5 scheduled runs per day during market hours
+  schedule:
+    - cron: '*/3 * * * *' # every 3 minute, for test
+    # Pre-market (4:00 AM ET = 9:00 AM UTC)
+    #- cron: '0 9 * * 1-5'
+    # Market open (9:30 AM ET = 2:30 PM UTC)  
+    #- cron: '30 14 * * 1-5'
+    # Mid-day (12:00 PM ET = 5:00 PM UTC)
+    #- cron: '0 17 * * 1-5'
+    # Market close (4:00 PM ET = 9:00 PM UTC)
+    #- cron: '0 21 * * 1-5'
+    # After hours (6:00 PM ET = 11:00 PM UTC)
+    #- cron: '0 23 * * 1-5'
+    
+  # Manual trigger
+  workflow_dispatch:
+
+# PRODUCTION ENVIRONMENT VARIABLES
+# Uses docker-compose.yml with default port 8080
+env:
+  PYTHONPATH: ${{ github.workspace }}/src
+  ENVIRONMENT: production
+  USE_REAL_DATA: false
+  NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
+
+jobs:
+  trading-workflow:
+    name: Execute Trading DAG (PRODUCTION Environment)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate environment variables
+        run: |
+          echo "Validating environment variables..."
+          echo "USE_REAL_DATA: ${{ env.USE_REAL_DATA }}"
+          echo "ENVIRONMENT: ${{ env.ENVIRONMENT }}"
+          
+          if [ "${{ env.USE_REAL_DATA }}" = "true" ]; then
+            if [ -z "${{ secrets.NEWSAPI_KEY }}" ]; then
+              echo "ERROR: NEWSAPI_KEY secret is required when USE_REAL_DATA=true"
+              exit 1
+            else
+              echo "NEWSAPI_KEY secret is configured"
+            fi
+          else
+            echo "Running in dummy data mode (no API keys required)"
+          fi
+
+      - name: Start Airflow services (PRODUCTION)
+        env:
+          USE_REAL_DATA: ${{ env.USE_REAL_DATA }}
+          NEWSAPI_KEY: ${{ env.NEWSAPI_KEY }}
+          ENVIRONMENT: ${{ env.ENVIRONMENT }}
+        run: |
+          echo "🏭 Starting Airflow services (default port 8080)..."
+          echo "USE_REAL_DATA: $USE_REAL_DATA"
+          echo "ENVIRONMENT: $ENVIRONMENT"
+          
+          # Export environment variables for docker-compose.yml (production)
+          export USE_REAL_DATA=$USE_REAL_DATA
+          export NEWSAPI_KEY=$NEWSAPI_KEY
+          export ENVIRONMENT=$ENVIRONMENT
+          
+          docker compose up -d postgres redis
+          
+          # Wait for databases to be ready
+          echo "Waiting for databases..."
+          timeout 60s bash -c 'until docker compose exec -T postgres pg_isready -U airflow; do sleep 2; done'
+          
+          # Start Airflow services
+          docker compose up -d airflow-webserver airflow-scheduler
+          
+          # Wait for Airflow to be ready
+          echo "Waiting for Airflow..."
+          timeout 120s bash -c 'until docker compose exec -T airflow-webserver airflow version; do sleep 5; done'
+
+      - name: Debug and fix DAG loading
+        run: |
+          echo "Checking DAG folder contents..."
+          docker compose exec -T airflow-webserver ls -la /opt/airflow/dags/
+          
+          echo "Testing DAG import without compilation..."
+          docker compose exec -T airflow-webserver python -c "
+          import sys; sys.path.insert(0, '/opt/airflow');
+          try:
+            from dags.trading_dag import dag
+            print(f'✅ DAG imported successfully: {dag.dag_id}')
+            print(f'DAG tags: {dag.tags}')
+            print(f'DAG description: {dag.description}')
+            print(f'Task count: {len(dag.tasks)}')
+          except Exception as e:
+            print(f'❌ Import error: {e}')
+            import traceback
+            traceback.print_exc()
+            raise
+          "
+          
+          echo "Forcing DAG refresh..."
+          docker compose exec -T airflow-webserver airflow dags reserialize
+          
+          echo "Waiting for DAG to appear in list..."
+          timeout 90s bash -c 'until docker compose exec -T airflow-webserver airflow dags list | grep -q "trading_workflow"; do sleep 5; echo "Still waiting for DAG..."; done'
+          
+          echo "Unpausing DAG..."
+          docker compose exec -T airflow-webserver airflow dags unpause trading_workflow || echo "Unpause failed"
+          
+          echo "Final DAG verification..."
+          docker compose exec -T airflow-webserver airflow dags list | grep trading_workflow || echo "DAG still not found after all steps"
+
+      - name: Trigger airflow dag (PRODUCTION)
+        env:
+          USE_REAL_DATA: ${{ env.USE_REAL_DATA }}
+          NEWSAPI_KEY: ${{ env.NEWSAPI_KEY }}
+          ENVIRONMENT: ${{ env.ENVIRONMENT }}
+        run: |
+          execution_date=$(date -u +"%Y-%m-%dT%H:%M:%S")
+          echo "🏭 Triggering trading workflow at: $execution_date (port 8080)"
+          echo "Environment: USE_REAL_DATA=$USE_REAL_DATA, ENVIRONMENT=$ENVIRONMENT"
+          
+          # Export environment variables for docker-compose.yml (production)
+          export USE_REAL_DATA=$USE_REAL_DATA
+          export NEWSAPI_KEY=$NEWSAPI_KEY
+          export ENVIRONMENT=$ENVIRONMENT
+          
+          docker compose exec -T airflow-webserver \
+            airflow dags trigger trading_workflow -e "$execution_date"
+          echo "✅ DAG triggered successfully on port 8080"
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: airflow-logs-${{ github.run_id }}
+          path: |
+            logs/
+            /var/log/
+          retention-days: 7
+        continue-on-error: true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          echo "🧹 Cleaning up..."
+          docker compose down -v || true
+          docker system prune -f || true
+
+concurrency:
+  group: trading-automation-${{ github.ref }}
+  cancel-in-progress: false

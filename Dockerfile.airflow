@@ -1,31 +1,28 @@
-FROM apache/airflow:2.7.3-python3.11
+# Custom Airflow Image with Trading Dependencies
+FROM apache/airflow:2.7.3
 
-# Switch to root to install additional dependencies
+# Switch to root to install dependencies
 USER root
 
-# Install system dependencies including netcat for health checks
-RUN apt-get update \
-    && apt-get install -y netcat-traditional postgresql-client \
-    && apt-get clean \
+# Install system dependencies required for our Python packages
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    libpq-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Switch back to airflow user
 USER airflow
 
-# Copy and install additional Python dependencies
-COPY requirements-airflow.txt /tmp/
+# Copy requirements file
+COPY requirements-airflow.txt /tmp/requirements-airflow.txt
+
+# Install Python dependencies
 RUN pip install --no-cache-dir -r /tmp/requirements-airflow.txt
 
-# Copy source code to the container
-COPY src/ /opt/airflow/src/
-
-# Copy DAGs (they need to reference src properly)
-COPY src/airflow_dags/ /opt/airflow/dags/
-
-# Set proper permissions
-USER root
-RUN chown -R airflow:root /opt/airflow/
-USER airflow
-
-# Set Python path so 'src' module can be imported
-ENV PYTHONPATH="/opt/airflow:/opt/airflow/src:${PYTHONPATH}"
+# Verify critical imports work
+RUN python -c "import yfinance; print('✅ yfinance imported successfully')"
+RUN python -c "from newsapi import NewsApiClient; print('✅ newsapi imported successfully')"
+RUN python -c "import pandas; print('✅ pandas imported successfully')"
+RUN python -c "from pydantic_settings import BaseSettings; print('✅ pydantic_settings imported successfully')"

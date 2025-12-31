@@ -129,33 +129,76 @@ class TestAnalysisFunctions:
     
     def test_technical_analysis_success(self):
         """Test successful technical analysis."""
-        mock_context = {'task_instance': Mock()}
+        mock_ti = Mock()
+        # Configure mock to return realistic market data structure
+        mock_ti.xcom_pull.return_value = {
+            'status': 'success',
+            'data_source': 'yahoo_finance',
+            'symbols': ['AAPL', 'SPY', 'QQQ'],
+            'data_points': 100,
+            'data': {
+                'AAPL': {'price': 150.0, 'volume': 1000000},
+                'SPY': {'price': 400.0, 'volume': 2000000},
+                'QQQ': {'price': 350.0, 'volume': 1500000}
+            }
+        }
+        mock_context = {'task_instance': mock_ti}
         result = simple_technical_analysis(**mock_context)
         
         assert result['status'] == 'success'
         assert 'indicators' in result
         assert 'signal' in result
-        mock_context['task_instance'].xcom_push.assert_called_once()
+        mock_ti.xcom_push.assert_called_once()
 
     def test_fundamental_analysis_success(self):
         """Test successful fundamental analysis."""
-        mock_context = {'task_instance': Mock()}
+        mock_ti = Mock()
+        # Configure mock to return realistic fundamental data structure
+        mock_ti.xcom_pull.return_value = {
+            'status': 'success',
+            'data_source': 'yahoo_finance',
+            'symbols_collected': 1,
+            'data': [{
+                'symbol': 'AAPL',
+                'pe_ratio': 25.5,
+                'market_cap': 2500000000000,
+                'revenue': 400000000000,
+                'profit_margin': 0.25,
+                'debt_to_equity': 1.5
+            }],
+            'metrics': {'pe_ratio': 25.5}
+        }
+        mock_context = {'task_instance': mock_ti}
         result = simple_fundamental_analysis(**mock_context)
         
         assert result['status'] == 'success'
         assert 'valuation' in result
         assert 'recommendation' in result
-        mock_context['task_instance'].xcom_push.assert_called_once()
+        mock_ti.xcom_push.assert_called_once()
 
     def test_sentiment_analysis_success(self):
         """Test successful sentiment analysis."""
-        mock_context = {'task_instance': Mock()}
+        mock_ti = Mock()
+        # Configure mock to return realistic sentiment data structure
+        mock_ti.xcom_pull.return_value = {
+            'status': 'success',
+            'data_source': 'newsapi',
+            'article_count': 15,
+            'sentiment_method': 'textblob',
+            'articles': [
+                {'title': 'Market Up', 'sentiment_score': 0.2, 'sentiment_label': 'positive'},
+                {'title': 'Tech Strong', 'sentiment_score': 0.15, 'sentiment_label': 'positive'},
+            ],
+            'sentiment': 0.175,
+            'score': 0.175
+        }
+        mock_context = {'task_instance': mock_ti}
         result = simple_sentiment_analysis(**mock_context)
         
         assert result['status'] == 'success'
         assert 'overall_sentiment' in result
         assert 'confidence' in result
-        mock_context['task_instance'].xcom_push.assert_called_once()
+        mock_ti.xcom_push.assert_called_once()
 
     def test_consensus_signals_success(self):
         """Test successful consensus signals calculation."""
@@ -176,13 +219,46 @@ class TestTradingFunctions:
     
     def test_generate_signals_success(self):
         """Test successful signal generation."""
-        mock_context = {'task_instance': Mock()}
+        mock_ti = Mock()
+        # Configure mock to return realistic analysis data structures
+        def mock_xcom_pull(key=None, task_ids=None):
+            if 'technical' in str(task_ids):
+                return {
+                    'status': 'success',
+                    'signal': 'buy',
+                    'confidence': 0.8,
+                    'indicators': {'rsi': 65, 'macd': 0.5}
+                }
+            elif 'fundamental' in str(task_ids):
+                return {
+                    'status': 'success',
+                    'recommendation': 'buy',
+                    'valuation': 'undervalued',
+                    'confidence': 0.75
+                }
+            elif 'sentiment' in str(task_ids):
+                return {
+                    'status': 'success',
+                    'overall_sentiment': 0.2,
+                    'confidence': 0.7
+                }
+            elif 'consensus' in str(task_ids):
+                return {
+                    'status': 'success',
+                    'consensus_score': 0.75,
+                    'confidence_level': 'high',
+                    'alignment_status': 'aligned'
+                }
+            return {'status': 'success'}
+        
+        mock_ti.xcom_pull.side_effect = mock_xcom_pull
+        mock_context = {'task_instance': mock_ti}
         result = simple_generate_signals(**mock_context)
         
         assert result['status'] == 'success'
         assert 'signals' in result
-        assert 'confidence' in result
-        mock_context['task_instance'].xcom_push.assert_called_once()
+        assert 'overall_confidence' in result
+        mock_ti.xcom_push.assert_called_once()
 
     def test_assess_risk_success(self):
         """Test successful risk assessment."""

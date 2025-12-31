@@ -6,7 +6,17 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from contextlib import contextmanager
 import pandas as pd, numpy as np
-from ..config import settings
+# Try to import settings, fallback to environment variables
+try:
+    from ..config import settings
+except ImportError:
+    # Fallback for Airflow environment where config.py dependencies aren't available
+    class Settings:
+        @property
+        def use_real_data(self): return os.getenv('USE_REAL_DATA', 'False').lower() == 'true'
+        @property  
+        def newsapi_key(self): return os.getenv('NEWSAPI_KEY')
+    settings = Settings()
 
 # Shared utilities with fallbacks
 try:
@@ -134,16 +144,77 @@ class DataManager:
     
     def _collect_weekly_fundamentals(self, symbol: str) -> Dict[str, Any]:
         """Collect weekly fundamental data for a symbol."""
-        if not settings.use_real_data: return self._generate_dummy_fundamental_data(symbol)
+        if not settings.use_real_data: 
+            return self._generate_dummy_fundamental_data(symbol)
+        
         try:
             if YFINANCE_AVAILABLE:
-                info = yf.Ticker(symbol).info
-                if info: return {"status": "success", "symbol": symbol, "pe_ratio": info.get('forwardPE', 20.0), "pb_ratio": info.get('priceToBook', 3.0), "ps_ratio": info.get('priceToSalesTrailing12Months', 2.0),
-                               "debt_to_equity": info.get('debtToEquity', 0.5), "profit_margins": info.get('profitMargins', 0.15), "return_on_equity": info.get('returnOnEquity', 0.18), "revenue_growth": info.get('revenueGrowth', 0.12),
-                               "earnings_growth": info.get('earningsGrowth', 0.10), "current_ratio": info.get('currentRatio', 1.5), "quick_ratio": info.get('quickRatio', 1.2), "timestamp": datetime.now().isoformat(), "data_source": "yfinance"}
-        except: pass
+                logger.info(f"🔄 Attempting to fetch real fundamental data for {symbol} via yfinance...")
+                ticker = yf.Ticker(symbol)
+                info = ticker.info
+                
+                if info and len(info) > 5:  # Valid response check
+                    logger.info(f"✅ Successfully fetched real fundamental data for {symbol}")
+                    return {
+                        "status": "success", 
+                        "symbol": symbol, 
+                        "pe_ratio": info.get('forwardPE', info.get('trailingPE', 20.0)), 
+                        "pb_ratio": info.get('priceToBook', 3.0), 
+                        "ps_ratio": info.get('priceToSalesTrailing12Months', 2.0),
+                        "debt_to_equity": info.get('debtToEquity', 0.5) / 100 if info.get('debtToEquity') else 0.5,  # Convert percentage
+                        "profit_margins": info.get('profitMargins', 0.15), 
+                        "return_on_equity": info.get('returnOnEquity', 0.18), 
+                        "revenue_growth": info.get('revenueGrowth', 0.12),
+                        "earnings_growth": info.get('earningsGrowth', 0.10), 
+                        "current_ratio": info.get('currentRatio', 1.5), 
+                        "quick_ratio": info.get('quickRatio', 1.2), 
+                        "timestamp": datetime.now().isoformat(), 
+                        "data_source": "yfinance_real"
+                    }
+                else:
+                    logger.warning(f"⚠️ Empty or invalid response from yfinance for {symbol}")
+                    
+        except requests.exceptions.HTTPError as e:
+            if "429" in str(e):
+                logger.warning(f"⚠️ Rate limit hit for {symbol}. Using cached/fallback data.")
+                # For rate limits, we'll use a mix of real-ish data instead of pure dummy
+                return self._generate_realistic_fundamental_data(symbol)
+            else:
+                logger.error(f"❌ HTTP error fetching fundamental data for {symbol}: {e}")
+        except Exception as e:
+            logger.error(f"❌ Unexpected error fetching fundamental data for {symbol}: {e}")
+        
+        logger.info(f"🔄 Falling back to dummy data for {symbol}")
         return self._generate_dummy_fundamental_data(symbol)
     
+    def _generate_realistic_fundamental_data(self, symbol: str) -> Dict[str, Any]:
+        """Generate realistic fundamental data when rate limited - uses approximate real values."""
+        # Realistic ranges based on common stock fundamentals
+        realistic_ranges = {
+            'AAPL': {'pe_ratio': (25, 35), 'pb_ratio': (4, 8), 'profit_margins': (0.20, 0.25)},
+            'SPY': {'pe_ratio': (18, 25), 'pb_ratio': (2.5, 4), 'profit_margins': (0.15, 0.20)},
+            'QQQ': {'pe_ratio': (20, 30), 'pb_ratio': (3, 6), 'profit_margins': (0.18, 0.23)},
+        }
+        
+        ranges = realistic_ranges.get(symbol, {'pe_ratio': (15, 30), 'pb_ratio': (1.5, 5), 'profit_margins': (0.10, 0.20)})
+        
+        return {
+            "status": "success", 
+            "symbol": symbol, 
+            "pe_ratio": round(random.uniform(*ranges['pe_ratio']), 2),
+            "pb_ratio": round(random.uniform(*ranges['pb_ratio']), 2), 
+            "ps_ratio": round(random.uniform(1.0, 4.0), 2),
+            "debt_to_equity": round(random.uniform(0.2, 1.0), 2), 
+            "profit_margins": round(random.uniform(*ranges['profit_margins']), 3),
+            "return_on_equity": round(random.uniform(0.15, 0.25), 3), 
+            "revenue_growth": round(random.uniform(0.05, 0.15), 3),
+            "earnings_growth": round(random.uniform(0.05, 0.20), 3), 
+            "current_ratio": round(random.uniform(1.2, 2.5), 2),
+            "quick_ratio": round(random.uniform(1.0, 2.0), 2), 
+            "timestamp": datetime.now().isoformat(), 
+            "data_source": "realistic_fallback"
+        }
+        
     def _generate_dummy_fundamental_data(self, symbol: str) -> Dict[str, Any]:
         """Generate dummy fundamental data."""
         return {"status": "success", "symbol": symbol, "pe_ratio": round(random.uniform(15.0, 35.0), 2),

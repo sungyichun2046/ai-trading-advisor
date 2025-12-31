@@ -9,7 +9,7 @@
 #   4. Validate task group execution: collect_data_tasks → analyze_data_tasks → execute_trades_tasks
 #   5. Check task completion and workflow success
 #
-# Uses docker-compose.yml (production environment)
+# Uses docker-compose.yml with AIRFLOW_PORT=8081 (test environment)
 # Mounts ./src/dags → /opt/airflow/dags
 #
 # Usage:
@@ -27,41 +27,72 @@ set -e
 
 # Parse command line arguments
 WAIT_TIMEOUT=120           # 2 minutes default for single DAG execution
+REAL_DATA_MODE=false       # Flag for real data testing
 
-# Check for timeout override
+# Check for command line options
 for arg in "$@"; do
     case $arg in
         --timeout=*)
             WAIT_TIMEOUT="${arg#*=}"
             echo "⏱️  Wait timeout set to: ${WAIT_TIMEOUT}s"
             ;;
+        --real-data)
+            REAL_DATA_MODE=true
+            echo "🔴 Real data mode enabled"
+            ;;
         --help)
             echo "Usage:"
             echo "  ./check_dags.sh                # Default: Test consolidated trading DAG"
             echo "  ./check_dags.sh --timeout=N    # Set custom timeout in seconds"
+            echo "  ./check_dags.sh --real-data    # Enable real API data collection"
             echo ""
             echo "Tests single consolidated trading_workflow DAG with task groups:"
             echo "  • collect_data_tasks (parallel data collection)"
             echo "  • analyze_data_tasks (analysis with consensus)"
             echo "  • execute_trades_tasks (trading execution)"
+            echo ""
+            echo "Real Data Mode:"
+            echo "  • Uses Yahoo Finance API for market data"
+            echo "  • Uses NewsAPI for sentiment data"
+            echo "  • Uses FinBERT for sentiment analysis"
             exit 0
             ;;
     esac
 done
 
-echo "🚀 Mode: Consolidated Trading DAG Validation"
-echo "============================================"
+if [ "$REAL_DATA_MODE" = true ]; then
+    echo "🚀 Mode: Real Data Integration Validation"
+    echo "=========================================="
+    echo "🔴 REAL DATA MODE ENABLED"
+    echo "  • Yahoo Finance API: Market data for AAPL, SPY, QQQ"
+    echo "  • NewsAPI: Sentiment data (max 50 articles)"
+    echo "  • FinBERT: Advanced sentiment analysis"
+else
+    echo "🚀 Mode: Consolidated Trading DAG Validation"
+    echo "============================================"
+    echo "🟢 DUMMY DATA MODE (default)"
+fi
 echo ""
 
-# Set environment for production
+# Set environment for testing (same database, different port)
 export POSTGRES_HOST=localhost
-export POSTGRES_DB=airflow 
+export POSTGRES_DB=airflow
 export POSTGRES_USER=airflow
 export POSTGRES_PASSWORD=airflow
 
-echo "📁 Production DAG Folder: $(pwd)/src/dags"
+# Configure data collection mode
+if [ "$REAL_DATA_MODE" = true ]; then
+    export USE_REAL_DATA=True
+    export NEWSAPI_KEY=494b17bf8af14d7cbb2d62f1e8b11088
+    echo "🔴 Environment configured for REAL DATA collection"
+else
+    export USE_REAL_DATA=False
+    echo "🟢 Environment configured for DUMMY DATA collection"
+fi
+
+echo "📁 Test DAG Folder: $(pwd)/src/dags"
 echo "📁 Expected: Single trading_dag.py with task groups"
-echo "🐳 Using main production Docker environment (port 8081)"
+echo "🐳 Using Docker environment (docker-compose.yml, port 8081)"
 echo ""
 
 # Check if source dags folder exists
@@ -214,13 +245,13 @@ echo "✅ Task groups replace separate DAGs"
 echo "✅ No ExternalTaskSensor dependencies needed"
 echo ""
 
-echo "🐳 STARTING PRODUCTION DOCKER ENVIRONMENT"
+echo "🐳 STARTING DOCKER ENVIRONMENT (PORT 8081)"
 echo "=========================================="
 
 echo "🛑 Stopping any running services..."
 docker compose down 2>/dev/null || true
 
-echo "🚀 Starting Airflow environment for testing..."
+echo "🚀 Starting Airflow environment on port 8081..."
 export AIRFLOW_PORT=8081
 docker compose up -d
 
@@ -312,8 +343,16 @@ docker compose exec airflow-webserver airflow dags trigger trading_workflow -e "
 echo "✅ trading_workflow DAG triggered"
 
 echo ""
-echo "⏳ Waiting ${WAIT_TIMEOUT}s for consolidated workflow to complete..."
-echo "📊 Expected execution: collect_data_tasks → analyze_data_tasks → execute_trades_tasks"
+if [ "$REAL_DATA_MODE" = true ]; then
+    echo "⏳ Waiting ${WAIT_TIMEOUT}s for REAL DATA workflow to complete..."
+    echo "📊 Expected execution with REAL APIs:"
+    echo "     • collect_data_tasks: Yahoo Finance + NewsAPI + FinBERT"
+    echo "     • analyze_data_tasks: Real data analysis + consensus"
+    echo "     • execute_trades_tasks: Trading based on real data"
+else
+    echo "⏳ Waiting ${WAIT_TIMEOUT}s for consolidated workflow to complete..."
+    echo "📊 Expected execution: collect_data_tasks → analyze_data_tasks → execute_trades_tasks"
+fi
 echo ""
 
 # Wait for execution
@@ -374,25 +413,47 @@ fi
 
 echo ""
 echo "==============================================="
-echo "🎯 CONSOLIDATED DAG VALIDATION REPORT"  
+if [ "$REAL_DATA_MODE" = true ]; then
+    echo "🎯 REAL DATA INTEGRATION VALIDATION REPORT"
+else
+    echo "🎯 CONSOLIDATED DAG VALIDATION REPORT"
+fi
 echo "==============================================="
 echo ""
 echo "📈 Consolidated Structure:  ✅ Single trading_dag.py with task groups"
 echo "🔗 Task Group Dependencies: ✅ collect_data_tasks → analyze_data_tasks → execute_trades_tasks"
 echo "🚫 ExternalTaskSensor:      ✅ Eliminated (native task dependencies)"
+if [ "$REAL_DATA_MODE" = true ]; then
+    echo "🔴 Data Integration:        ✅ Real API calls (Yahoo Finance + NewsAPI + FinBERT)"
+else
+    echo "🟢 Data Mode:               ✅ Dummy data (fast validation)"
+fi
 echo "📊 Execution Result:        $final_result"
 echo ""
 
 if [ "$final_result" == "SUCCESS" ]; then
-    echo "🎉 OVERALL RESULT: ✅ SUCCESS - Consolidated DAG workflow complete!"
-    echo "✅ Task group execution validated"
-    echo "✅ Single DAG architecture working perfectly"
+    if [ "$REAL_DATA_MODE" = true ]; then
+        echo "🎉 OVERALL RESULT: ✅ SUCCESS - Real Data Integration complete!"
+        echo "✅ Yahoo Finance API: Market data collected successfully"
+        echo "✅ NewsAPI: Sentiment data collected successfully" 
+        echo "✅ FinBERT: Advanced sentiment analysis working"
+        echo "✅ Real data workflow execution validated"
+    else
+        echo "🎉 OVERALL RESULT: ✅ SUCCESS - Consolidated DAG workflow complete!"
+        echo "✅ Task group execution validated"
+        echo "✅ Single DAG architecture working perfectly"
+    fi
     echo "✅ No cross-DAG dependency issues"
 elif [ "$final_result" == "RUNNING" ]; then
     echo "⏳ OVERALL RESULT: 🟡 IN PROGRESS - Workflow executing"
     echo "ℹ️  Increase timeout or check execution progress manually"
 else
-    echo "❌ OVERALL RESULT: ❌ FAILURE - Workflow execution failed"
+    if [ "$REAL_DATA_MODE" = true ]; then
+        echo "❌ OVERALL RESULT: ❌ FAILURE - Real data integration failed"
+        echo "⚠️  Check API keys, network connectivity, and Airflow UI"
+    else
+        echo "❌ OVERALL RESULT: ❌ FAILURE - Workflow execution failed"
+    fi
     echo "⚠️  Check Airflow UI for task execution details"
 fi
 

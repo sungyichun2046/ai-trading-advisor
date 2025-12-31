@@ -1,7 +1,10 @@
-version: '3.3'
+version: '3.8'
 
 services:
   # Single PostgreSQL for both Airflow and app
+  # ----------------------------
+  # PostgreSQL (Airflow metadata DB)
+  # ----------------------------
   postgres:
     image: postgres:15-alpine
     environment:
@@ -32,7 +35,9 @@ services:
 
   # Airflow Webserver
   airflow-webserver:
-    image: apache/airflow:2.7.3
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
     depends_on:
       - postgres
       - redis
@@ -48,6 +53,13 @@ services:
       _AIRFLOW_WWW_USER_CREATE: 'true' 
       _AIRFLOW_WWW_USER_USERNAME: admin
       _AIRFLOW_WWW_USER_PASSWORD: admin
+      # Real data integration environment variables
+      USE_REAL_DATA: ${USE_REAL_DATA:-False}
+      NEWSAPI_KEY: ${NEWSAPI_KEY:-}
+      POSTGRES_HOST: ${POSTGRES_HOST:-localhost}
+      POSTGRES_DB: ${POSTGRES_DB:-airflow}
+      POSTGRES_USER: ${POSTGRES_USER:-airflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airflow}
     volumes:
       - ./src/dags:/opt/airflow/dags:ro
       - ./src:/opt/airflow/src:ro
@@ -64,7 +76,9 @@ services:
 
   # Airflow Scheduler
   airflow-scheduler:
-    image: apache/airflow:2.7.3
+    build:
+      context: .
+      dockerfile: Dockerfile.airflow
     depends_on:
       - airflow-webserver
     environment:
@@ -74,6 +88,13 @@ services:
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
       AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
       PYTHONPATH: '/opt/airflow'
+      # Real data integration environment variables
+      USE_REAL_DATA: ${USE_REAL_DATA:-False}
+      NEWSAPI_KEY: ${NEWSAPI_KEY:-}
+      POSTGRES_HOST: ${POSTGRES_HOST:-localhost}
+      POSTGRES_DB: ${POSTGRES_DB:-airflow}
+      POSTGRES_USER: ${POSTGRES_USER:-airflow}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airflow}
     volumes:
       - ./src/dags:/opt/airflow/dags:ro
       - ./src:/opt/airflow/src:ro

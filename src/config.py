@@ -10,18 +10,18 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     # Postgres db
-    postgres_db: str
-    postgres_user: str
-    postgres_password: str
-    postgres_host: str
-    postgres_port: int
+    postgres_db: str = "trading_advisor"
+    postgres_user: str = "trader"
+    postgres_password: str = "trader_password"
+    postgres_host: str = "localhost"
+    postgres_port: int = 5432
 
     # Airflow
-    airflow__core__executor: str
-    airflow__database__sql_alchemy_conn: str
-    airflow__core__fernet_key: str
-    airflow__core__dags_folder: str
-    airflow__core__load_examples: bool
+    airflow__core__executor: str = "LocalExecutor"
+    airflow__database__sql_alchemy_conn: str = "sqlite:///airflow.db"
+    airflow__core__fernet_key: str = "test"
+    airflow__core__dags_folder: str = "/opt/airflow/dags"
+    airflow__core__load_examples: bool = False
     # Database Configuration
     database_url: str = (
         "postgresql://trader:trader_password@localhost:5432/trading_advisor"
