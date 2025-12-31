@@ -5,8 +5,8 @@ on:
     branches:
       - main  # or your target branch
   # 5 scheduled runs per day during market hours
-  schedule:
-    - cron: '*/3 * * * *' # every 3 minute, for test
+  #schedule:
+  #  - cron: '*/3 * * * *' # every 3 minute, for test
     # Pre-market (4:00 AM ET = 9:00 AM UTC)
     #- cron: '0 9 * * 1-5'
     # Market open (9:30 AM ET = 2:30 PM UTC)  
@@ -26,7 +26,6 @@ on:
 env:
   PYTHONPATH: ${{ github.workspace }}/src
   ENVIRONMENT: production
-  USE_REAL_DATA: false
   NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
 
 jobs:
@@ -41,32 +40,26 @@ jobs:
       - name: Validate environment variables
         run: |
           echo "Validating environment variables..."
-          echo "USE_REAL_DATA: ${{ env.USE_REAL_DATA }}"
           echo "ENVIRONMENT: ${{ env.ENVIRONMENT }}"
           
-          if [ "${{ env.USE_REAL_DATA }}" = "true" ]; then
-            if [ -z "${{ secrets.NEWSAPI_KEY }}" ]; then
-              echo "ERROR: NEWSAPI_KEY secret is required when USE_REAL_DATA=true"
-              exit 1
-            else
-              echo "NEWSAPI_KEY secret is configured"
-            fi
+          if [ -n "${{ secrets.NEWSAPI_KEY }}" ]; then
+            echo "NEWSAPI_KEY secret is configured for intelligent caching"
           else
-            echo "Running in dummy data mode (no API keys required)"
+            echo "WARNING: NEWSAPI_KEY not configured - sentiment data will use fallbacks"
           fi
+          
+          echo "Intelligent caching system will handle all API calls with fallbacks"
 
       - name: Start Airflow services (PRODUCTION)
         env:
-          USE_REAL_DATA: ${{ env.USE_REAL_DATA }}
           NEWSAPI_KEY: ${{ env.NEWSAPI_KEY }}
           ENVIRONMENT: ${{ env.ENVIRONMENT }}
         run: |
-          echo "🏭 Starting Airflow services (default port 8080)..."
-          echo "USE_REAL_DATA: $USE_REAL_DATA"
+          echo "🏭 Starting Airflow services with intelligent caching (port 8080)..."
           echo "ENVIRONMENT: $ENVIRONMENT"
+          echo "Intelligent caching: Enabled with multi-layer strategy"
           
           # Export environment variables for docker-compose.yml (production)
-          export USE_REAL_DATA=$USE_REAL_DATA
           export NEWSAPI_KEY=$NEWSAPI_KEY
           export ENVIRONMENT=$ENVIRONMENT
           
@@ -118,16 +111,14 @@ jobs:
 
       - name: Trigger airflow dag (PRODUCTION)
         env:
-          USE_REAL_DATA: ${{ env.USE_REAL_DATA }}
           NEWSAPI_KEY: ${{ env.NEWSAPI_KEY }}
           ENVIRONMENT: ${{ env.ENVIRONMENT }}
         run: |
           execution_date=$(date -u +"%Y-%m-%dT%H:%M:%S")
-          echo "🏭 Triggering trading workflow at: $execution_date (port 8080)"
-          echo "Environment: USE_REAL_DATA=$USE_REAL_DATA, ENVIRONMENT=$ENVIRONMENT"
+          echo "🏭 Triggering intelligent caching workflow at: $execution_date (port 8080)"
+          echo "Environment: ENVIRONMENT=$ENVIRONMENT, Caching=Enabled"
           
           # Export environment variables for docker-compose.yml (production)
-          export USE_REAL_DATA=$USE_REAL_DATA
           export NEWSAPI_KEY=$NEWSAPI_KEY
           export ENVIRONMENT=$ENVIRONMENT
           
