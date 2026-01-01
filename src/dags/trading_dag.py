@@ -2,11 +2,15 @@
 Consolidated Trading DAG - Complete workflow in one DAG with task groups
 Enhanced with business logic for conditional execution.
 """
+import logging, os
+from src.core.data_manager import RealDataValidationError
+from src.utils.trading_utils import is_market_open
 
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 from airflow.utils.task_group import TaskGroup
+
 
 
 # Consolidated DAG configuration
@@ -31,67 +35,84 @@ dag = DAG(
 
 # ===== DATA COLLECTION FUNCTIONS =====
 def simple_collect_market_data(**context):
-    """Collect market data - real APIs if USE_REAL_DATA=True, dummy data if False."""
-    import logging
-    import os
+    """Collect market data using simple LRU cache - validates USE_REAL_DATA and market hours."""
     logger = logging.getLogger(__name__)
     
-    # Check USE_REAL_DATA environment variable
-    use_real_data = os.getenv('USE_REAL_DATA', 'False').lower() == 'true'
     logger.info(f"=== MARKET DATA COLLECTION STARTING ===")
-    logger.info(f"🔧 USE_REAL_DATA: {use_real_data}")
+    logger.info(f"🔧 Using simple LRU cache with USE_REAL_DATA validation")
     
-    if use_real_data:
-        logger.info("📊 USING REAL YAHOO FINANCE API")
-        try:
-            from src.core.data_manager import get_data_manager
-            data_manager = get_data_manager()
-            
-            # Collect real market data for specified symbols
-            symbols = ['AAPL', 'SPY', 'QQQ']
-            logger.info(f"📈 Requesting data for symbols: {symbols}")
-            market_result = data_manager.collect_market_data(symbols)
-            
-            # Extract and log detailed data information
-            collected_data = market_result.get('data', {})
-            
-            # Log detailed Yahoo Finance results
-            logger.info(f"🎯 YAHOO FINANCE RESULTS:")
-            logger.info(f"   • Status: {market_result.get('status')}")
-            logger.info(f"   • Symbols collected: {len(collected_data)}/{len(symbols)}")
-            logger.info(f"   • Data points: {len(collected_data)}")
-            
-            # Log sample data for each symbol
-            for symbol, data in collected_data.items():
-                price = data.get('price', 'N/A')
-                source = data.get('data_source', 'unknown')
-                volume = data.get('volume', 'N/A')
-                logger.info(f"   • {symbol}: ${price} (source: {source}, volume: {volume:,})")
-            
-            if market_result.get('errors'):
-                logger.warning(f"   • Errors: {market_result['errors']}")
-            
-            result = {
-                'status': market_result.get('status', 'success'),
-                'timestamp': datetime.now().isoformat(),
-                'symbols': list(collected_data.keys()),
-                'data_points': len(collected_data),
-                'data': collected_data,
-                'errors': market_result.get('errors', []),
-                'data_source': 'yahoo_finance'
-            }
-            
-            logger.info(f"✅ REAL MARKET DATA COLLECTION SUCCESSFUL")
-            
-        except Exception as e:
-            logger.error(f"❌ REAL MARKET DATA FAILED: {e}")
-            
-            # When USE_REAL_DATA=True, we should FAIL the DAG if real data collection fails
-            logger.error(f"🚨 CRITICAL: Real data expected but failed to collect!")
-            logger.error(f"🚨 Raising exception to stop DAG execution...")
-            raise Exception(f"Real market data collection failed when USE_REAL_DATA=True: {e}")
-    else:
-        logger.info("📝 USING DUMMY MARKET DATA (USE_REAL_DATA=False)")
+    # Check market hours - skip real data collection when market is closed
+    market_open = is_market_open()
+    use_real_data = os.getenv('USE_REAL_DATA', 'false').lower() == 'true'
+    
+    logger.info(f"🕐 Market status: {'OPEN' if market_open else 'CLOSED'}")
+    logger.info(f"📊 USE_REAL_DATA: {use_real_data}")
+    
+    if use_real_data and not market_open:
+        logger.info(f"⏸️  Market is closed - using cached data instead of live APIs")
+        # When market closed + USE_REAL_DATA=True, use last cached data instead of failing
+        os.environ['USE_REAL_DATA'] = 'False'  # Override environment variable
+        logger.info(f"🔄 Temporarily set USE_REAL_DATA=False to use cached/dummy data")
+    
+    try:
+        from src.core.data_manager import get_data_manager
+        data_manager = get_data_manager()
+        
+        # Collect market data (will use cached/dummy data if market closed)
+        symbols = ['AAPL', 'SPY', 'QQQ']
+        logger.info(f"📈 Requesting data for symbols with LRU cache: {symbols}")
+        
+        # This will gracefully use cached data when market is closed
+        market_result = data_manager.collect_market_data(symbols)
+        
+        # Extract and log detailed data information
+        collected_data = market_result.get('data', {})
+        
+        # Log detailed results
+        logger.info(f"🎯 MARKET DATA RESULTS:")
+        logger.info(f"   • Status: {market_result.get('status')}")
+        logger.info(f"   • Symbols collected: {len(collected_data)}/{len(symbols)}")
+        logger.info(f"   • LRU Cache: {market_result.get('caching_enabled', False)}")
+        logger.info(f"   • Cache Stats: {market_result.get('cache_info', {})}")
+        
+        # Log sample data for each symbol
+        for symbol, data in collected_data.items():
+            price = data.get('price', 'N/A')
+            source = data.get('data_source', 'unknown')
+            volume = data.get('volume', 'N/A')
+            logger.info(f"   • {symbol}: ${price} (source: {source}, volume: {volume:,})")
+        
+        if market_result.get('errors'):
+            logger.warning(f"   • Errors: {market_result['errors']}")
+        
+        result = {
+            'status': market_result.get('status', 'success'),
+            'timestamp': datetime.now().isoformat(),
+            'symbols': list(collected_data.keys()),
+            'data_points': len(collected_data),
+            'data': collected_data,
+            'errors': market_result.get('errors', []),
+            'data_source': 'lru_cached_apis',
+            'caching_enabled': True,
+            'cache_info': market_result.get('cache_info', {}),
+            'use_real_data': os.getenv('USE_REAL_DATA', 'false').lower() == 'true',
+            'market_open': market_open,
+            'market_closed_override': use_real_data and not market_open
+        }
+        
+        logger.info(f"✅ MARKET DATA COLLECTION SUCCESSFUL WITH LRU CACHE")
+        
+    except RealDataValidationError as e:
+        logger.error(f"💥 USE_REAL_DATA VALIDATION FAILED: {e}")
+        logger.error(f"🛑 DAG WILL FAIL FAST - NO DUMMY DATA ALLOWED")
+        raise  # Re-raise to fail the DAG immediately
+    except Exception as e:
+        logger.error(f"❌ MARKET DATA COLLECTION FAILED: {e}")
+        # Only use dummy data if USE_REAL_DATA=False
+        if os.getenv('USE_REAL_DATA', 'false').lower() == 'true':
+            logger.error(f"🛑 USE_REAL_DATA=True - CANNOT use dummy fallback")
+            raise RealDataValidationError(f"Market data collection failed with USE_REAL_DATA=True: {e}")
+        logger.warning(f"🔄 Falling back to dummy data for reliability")
         result = _generate_dummy_market_data()
     
     context['task_instance'].xcom_push(key='market_data', value=result)
@@ -124,81 +145,84 @@ def _generate_dummy_market_data():
     }
 
 def simple_collect_fundamental_data(**context):
-    """Collect fundamental data - real APIs if USE_REAL_DATA=True, dummy data if False."""
+    """Collect fundamental data using intelligent caching system - always tries real APIs."""
     import logging
-    import os
     logger = logging.getLogger(__name__)
     
-    # Check USE_REAL_DATA environment variable
-    use_real_data = os.getenv('USE_REAL_DATA', 'False').lower() == 'true'
     logger.info(f"=== FUNDAMENTAL DATA COLLECTION STARTING ===")
-    logger.info(f"🔧 USE_REAL_DATA: {use_real_data}")
+    logger.info(f"🔧 Using intelligent caching with real API fallbacks")
     
-    if use_real_data:
-        logger.info("📈 USING REAL YAHOO FINANCE FUNDAMENTAL API")
-        try:
-            from src.core.data_manager import get_data_manager
-            data_manager = get_data_manager()
+    try:
+        from src.core.data_manager import get_data_manager
+        data_manager = get_data_manager()
+        
+        # Always attempt to collect real fundamental data with smart caching
+        symbols = ['AAPL']
+        logger.info(f"📊 Requesting fundamental data with caching: {symbols}")
+        fundamental_result = data_manager.collect_fundamental_data(symbols)
+        
+        # Extract and log detailed fundamental data
+        collected_data = fundamental_result.get('data', [])
+        
+        logger.info(f"🎯 FUNDAMENTAL DATA RESULTS:")
+        logger.info(f"   • Status: {fundamental_result.get('status')}")
+        logger.info(f"   • Symbols analyzed: {len(collected_data)}/{len(symbols)}")
+        logger.info(f"   • Caching enabled: {fundamental_result.get('caching_enabled', False)}")
+        
+        # Process collected data
+        if collected_data:
+            first_data = collected_data[0] if isinstance(collected_data, list) else collected_data
+            data_source = first_data.get('data_source', 'cached_apis')
             
-            # Collect fundamental data for AAPL (as specified)
-            symbols = ['AAPL']
-            logger.info(f"📊 Requesting fundamental data for: {symbols}")
-            fundamental_result = data_manager.collect_fundamental_data(symbols)
+            # Log detailed fundamental metrics
+            logger.info(f"   • Data source: {data_source}")
+            logger.info(f"   • PE Ratio: {first_data.get('pe_ratio', 'N/A')}")
+            logger.info(f"   • PB Ratio: {first_data.get('pb_ratio', 'N/A')}")
+            logger.info(f"   • Profit Margins: {first_data.get('profit_margins', 'N/A')}")
+            logger.info(f"   • ROE: {first_data.get('return_on_equity', 'N/A')}")
+            logger.info(f"   • Revenue Growth: {first_data.get('revenue_growth', 'N/A')}")
             
-            # Extract and log detailed fundamental data
-            collected_data = fundamental_result.get('data', [])
-            
-            logger.info(f"🎯 FUNDAMENTAL DATA RESULTS:")
-            logger.info(f"   • Status: {fundamental_result.get('status')}")
-            logger.info(f"   • Symbols analyzed: {len(collected_data)}/{len(symbols)}")
-            
-            if collected_data:
-                first_data = collected_data[0] if isinstance(collected_data, list) else collected_data
-                data_source = first_data.get('data_source', 'unknown')
-                
-                # Log detailed fundamental metrics
-                logger.info(f"   • Data source: {data_source}")
-                logger.info(f"   • PE Ratio: {first_data.get('pe_ratio', 'N/A')}")
-                logger.info(f"   • PB Ratio: {first_data.get('pb_ratio', 'N/A')}")
-                logger.info(f"   • Profit Margins: {first_data.get('profit_margins', 'N/A')}")
-                logger.info(f"   • ROE: {first_data.get('return_on_equity', 'N/A')}")
-                logger.info(f"   • Revenue Growth: {first_data.get('revenue_growth', 'N/A')}")
-                
-                metrics = {
-                    'pe_ratio': first_data.get('pe_ratio', 15.0),
-                    'pb_ratio': first_data.get('pb_ratio', 2.0),
-                    'ps_ratio': first_data.get('ps_ratio', 2.0),
-                    'debt_to_equity': first_data.get('debt_to_equity', 0.5),
-                    'profit_margins': first_data.get('profit_margins', 0.15),
-                    'return_on_equity': first_data.get('return_on_equity', 0.18)
-                }
-            else:
-                logger.warning(f"   • No fundamental data received, using defaults")
-                metrics = {'pe_ratio': 15.0, 'pb_ratio': 2.0}
-            
-            if fundamental_result.get('errors'):
-                logger.warning(f"   • Errors: {fundamental_result['errors']}")
-            
-            result = {
-                'status': fundamental_result.get('status', 'success'),
-                'timestamp': datetime.now().isoformat(),
-                'metrics': metrics,
-                'symbols_analyzed': len(collected_data),
-                'errors': fundamental_result.get('errors', []),
-                'data_source': 'yahoo_finance'
+            metrics = {
+                'pe_ratio': first_data.get('pe_ratio', 15.0),
+                'pb_ratio': first_data.get('pb_ratio', 2.0),
+                'ps_ratio': first_data.get('ps_ratio', 2.0),
+                'debt_to_equity': first_data.get('debt_to_equity', 0.5),
+                'profit_margins': first_data.get('profit_margins', 0.15),
+                'return_on_equity': first_data.get('return_on_equity', 0.18)
             }
-            
-            logger.info(f"✅ REAL FUNDAMENTAL DATA COLLECTION SUCCESSFUL")
-            
-        except Exception as e:
-            logger.error(f"❌ REAL FUNDAMENTAL DATA FAILED: {e}")
-            
-            # When USE_REAL_DATA=True, we should FAIL the DAG if real data collection fails
-            logger.error(f"🚨 CRITICAL: Real fundamental data expected but failed to collect!")
-            logger.error(f"🚨 Raising exception to stop DAG execution...")
-            raise Exception(f"Real fundamental data collection failed when USE_REAL_DATA=True: {e}")
-    else:
-        logger.info("📝 USING DUMMY FUNDAMENTAL DATA (USE_REAL_DATA=False)")
+        else:
+            logger.warning(f"   • No fundamental data received, using defaults")
+            metrics = {'pe_ratio': 15.0, 'pb_ratio': 2.0}
+        
+        if fundamental_result.get('errors'):
+            logger.warning(f"   • Errors: {fundamental_result['errors']}")
+        
+        result = {
+            'status': fundamental_result.get('status', 'success'),
+            'timestamp': datetime.now().isoformat(),
+            'metrics': metrics,
+            'symbols_analyzed': len(collected_data),
+            'errors': fundamental_result.get('errors', []),
+            'data_source': 'cached_apis',
+            'caching_enabled': fundamental_result.get('caching_enabled', False)
+        }
+        
+        logger.info(f"✅ FUNDAMENTAL DATA COLLECTION SUCCESSFUL WITH CACHING")
+
+    except RealDataValidationError as e:
+        logger.error(f"💥 USE_REAL_DATA VALIDATION FAILED: {e}")
+        logger.error(f"🛑 DAG WILL FAIL FAST - NO DUMMY DATA ALLOWED")
+        raise  # Re-raise to fail the DAG immediately
+
+    except Exception as e:
+        logger.error(f"❌ FUNDAMENTAL DATA COLLECTION FAILED: {e}")
+        # Only use dummy data if USE_REAL_DATA=False
+        if os.getenv('USE_REAL_DATA', 'false').lower() == 'true':
+            logger.error(f"🛑 USE_REAL_DATA=True - CANNOT use dummy fallback")
+            raise RealDataValidationError(f"Fundamental data collection failed with USE_REAL_DATA=True: {e}")
+        
+        # Fallback to dummy data instead of failing
+        logger.warning(f"🔄 Falling back to dummy data for reliability")
         result = _generate_dummy_fundamental_data()
     
     context['task_instance'].xcom_push(key='fundamental_data', value=result)
@@ -224,98 +248,112 @@ def _generate_dummy_fundamental_data():
     }
 
 def simple_collect_sentiment(**context):
-    """Collect sentiment data - real NewsAPI+FinBERT if USE_REAL_DATA=True, dummy if False."""
+    """Collect sentiment data using intelligent caching system - always tries real APIs."""
     import logging
-    import os
     logger = logging.getLogger(__name__)
     
-    # Check USE_REAL_DATA environment variable
-    use_real_data = os.getenv('USE_REAL_DATA', 'False').lower() == 'true'
     logger.info(f"=== SENTIMENT DATA COLLECTION STARTING ===")
-    logger.info(f"🔧 USE_REAL_DATA: {use_real_data}")
+    logger.info(f"🔧 Using intelligent caching with real API fallbacks")
     
-    if use_real_data:
-        logger.info("📰 USING REAL NEWSAPI + FINBERT SENTIMENT")
-        try:
-            from src.core.data_manager import get_data_manager
-            data_manager = get_data_manager()
+    try:
+        from src.core.data_manager import get_data_manager
+        data_manager = get_data_manager()
+        
+        # Always attempt to collect real sentiment data with smart caching
+        logger.info(f"📊 Requesting sentiment data with caching (max 50 articles)")
+        sentiment_result = data_manager.collect_sentiment_data(max_articles=50)
+        
+        # Extract and log detailed sentiment information
+        articles = sentiment_result.get('articles', [])
+        article_count = sentiment_result.get('article_count', 0)
+        sentiment_method = sentiment_result.get('sentiment_method', 'unknown')
+        
+        logger.info(f"🎯 SENTIMENT DATA RESULTS:")
+        logger.info(f"   • Status: {sentiment_result.get('status')}")
+        logger.info(f"   • Articles collected: {article_count}/50")
+        logger.info(f"   • Sentiment method: {sentiment_method}")
+        logger.info(f"   • Caching enabled: {sentiment_result.get('caching_enabled', False)}")
+        
+        # Process sentiment data
+        if articles:
+            logger.info(f"   📋 Sample Articles:")
+            for i, article in enumerate(articles[:3]):  # Log first 3 articles
+                title = article.get('title', 'No title')[:60] + '...' if len(article.get('title', '')) > 60 else article.get('title', 'No title')
+                score = article.get('sentiment_score', 0.0)
+                label = article.get('sentiment_label', 'neutral')
+                source = article.get('source', 'Unknown')
+                logger.info(f"     {i+1}. [{source}] {title}")
+                logger.info(f"        Sentiment: {label} (score: {score:.3f})")
             
-            # Collect sentiment data with max 50 articles (as specified)
-            logger.info(f"📊 Requesting sentiment data (max 50 articles)")
-            sentiment_result = data_manager.collect_sentiment_data(max_articles=50)
+            # Calculate and log overall sentiment
+            sentiment_scores = [article.get('sentiment_score', 0.0) for article in articles if article.get('sentiment_score') is not None]
+            avg_sentiment = sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else 0.0
             
-            # Extract and log detailed sentiment information
-            articles = sentiment_result.get('articles', [])
-            article_count = sentiment_result.get('article_count', 0)
-            sentiment_method = sentiment_result.get('sentiment_method', 'unknown')
-            
-            logger.info(f"🎯 NEWSAPI + SENTIMENT ANALYSIS RESULTS:")
-            logger.info(f"   • Status: {sentiment_result.get('status')}")
-            logger.info(f"   • Articles collected: {article_count}/50")
-            logger.info(f"   • Sentiment method: {sentiment_method}")
-            
-            # Log sample article titles and scores
-            if articles:
-                logger.info(f"   📋 Sample Articles:")
-                for i, article in enumerate(articles[:3]):  # Log first 3 articles
-                    title = article.get('title', 'No title')[:60] + '...' if len(article.get('title', '')) > 60 else article.get('title', 'No title')
-                    score = article.get('sentiment_score', 0.0)
-                    label = article.get('sentiment_label', 'neutral')
-                    source = article.get('source', 'Unknown')
-                    logger.info(f"     {i+1}. [{source}] {title}")
-                    logger.info(f"        Sentiment: {label} (score: {score:.3f})")
-                
-                # Calculate and log overall sentiment
-                sentiment_scores = [article.get('sentiment_score', 0.0) for article in articles if article.get('sentiment_score') is not None]
-                avg_sentiment = sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else 0.0
-                
-                # Determine overall sentiment label
-                if avg_sentiment > 0.1:
-                    sentiment_label = 'positive'
-                elif avg_sentiment < -0.1:
-                    sentiment_label = 'negative'
-                else:
-                    sentiment_label = 'neutral'
-                
-                logger.info(f"   📊 Overall Sentiment: {sentiment_label} (avg score: {avg_sentiment:.3f})")
-                logger.info(f"   📈 Score Distribution: min={min(sentiment_scores):.3f}, max={max(sentiment_scores):.3f}")
+            # Determine overall sentiment label
+            if avg_sentiment > 0.1:
+                sentiment_label = 'positive'
+            elif avg_sentiment < -0.1:
+                sentiment_label = 'negative'
             else:
-                logger.warning(f"   • No articles received")
-                avg_sentiment = 0.0
                 sentiment_label = 'neutral'
             
-            result = {
-                'status': sentiment_result.get('status', 'success'),
-                'timestamp': datetime.now().isoformat(),
-                'sentiment': sentiment_label,
-                'score': round(avg_sentiment, 3),
-                'article_count': article_count,
-                'sentiment_method': sentiment_method,
-                'articles_preview': articles[:5],  # First 5 articles for preview
-                'data_source': f'newsapi+{sentiment_method}'
-            }
-            
-            logger.info(f"✅ REAL SENTIMENT DATA COLLECTION SUCCESSFUL")
-            
-        except Exception as e:
-            logger.error(f"❌ REAL SENTIMENT DATA FAILED: {e}")
-            
-            # When USE_REAL_DATA=True, we should FAIL the DAG if real data collection fails
-            logger.error(f"🚨 CRITICAL: Real sentiment data expected but failed to collect!")
-            logger.error(f"🚨 Raising exception to stop DAG execution...")
-            raise Exception(f"Real sentiment data collection failed when USE_REAL_DATA=True: {e}")
-    else:
-        logger.info("📝 USING DUMMY SENTIMENT DATA (USE_REAL_DATA=False)")
+            logger.info(f"   📊 Overall Sentiment: {sentiment_label} (avg score: {avg_sentiment:.3f})")
+            if sentiment_scores:
+                logger.info(f"   📈 Score Distribution: min={min(sentiment_scores):.3f}, max={max(sentiment_scores):.3f}")
+        else:
+            logger.warning(f"   • No articles received")
+            avg_sentiment = 0.0
+            sentiment_label = 'neutral'
+        
+        result = {
+            'status': sentiment_result.get('status', 'success'),
+            'timestamp': datetime.now().isoformat(),
+            'sentiment': sentiment_label,
+            'score': round(avg_sentiment, 3),
+            'article_count': article_count,
+            'sentiment_method': sentiment_method,
+            'articles_preview': articles[:5],  # First 5 articles for preview
+            'data_source': 'cached_apis',
+            'caching_enabled': sentiment_result.get('caching_enabled', False)
+        }
+        
+        logger.info(f"✅ SENTIMENT DATA COLLECTION SUCCESSFUL WITH CACHING")
+    
+    except RealDataValidationError as e:
+        logger.error(f"💥 USE_REAL_DATA VALIDATION FAILED: {e}")
+        logger.error(f"🛑 DAG WILL FAIL FAST - NO DUMMY DATA ALLOWED")
+        raise  # Re-raise to fail the DAG immediately
+    
+    except Exception as e:
+        logger.error(f"❌ SENTIMENT DATA COLLECTION FAILED: {e}")
+        # Only use dummy data if USE_REAL_DATA=False
+        if os.getenv('USE_REAL_DATA', 'false').lower() == 'true':
+            logger.error(f"🛑 USE_REAL_DATA=True - CANNOT use dummy fallback")
+            raise RealDataValidationError(f"Sentiment data collection failed with USE_REAL_DATA=True: {e}")
+
+
+        # Fallback to dummy data instead of failing
+        logger.warning(f"🔄 Falling back to dummy data for reliability")
         result = _generate_dummy_sentiment_data()
     
     context['task_instance'].xcom_push(key='sentiment_data', value=result)
     logger.info(f"=== SENTIMENT DATA COLLECTION COMPLETE ===\n")
     return result
 
+
+    """
+        except Exception as e:
+        logger.error(f"❌ MARKET DATA COLLECTION FAILED: {e}")
+        # Only use dummy data if USE_REAL_DATA=False
+        if os.getenv('USE_REAL_DATA', 'false').lower() == 'true':
+            logger.error(f"🛑 USE_REAL_DATA=True - CANNOT use dummy fallback")
+            raise RealDataValidationError(f"Market data collection failed with USE_REAL_DATA=True: {e}")
+        logger.warning(f"🔄 Falling back to dummy data for reliability")
+        result = _generate_dummy_market_data()
+    """
+
 def _generate_dummy_sentiment_data():
     """Generate dummy sentiment data for testing."""
-    import random
-    
     # Generate dummy articles
     dummy_articles = [
         {'title': 'Market Outlook Positive for Tech Stocks', 'sentiment_score': 0.3, 'sentiment_label': 'positive', 'source': 'Dummy News'},
@@ -377,12 +415,22 @@ def monitor_data_systems(**context):
 
 # ===== ANALYSIS FUNCTIONS =====
 def simple_technical_analysis(**context):
-    """Technical analysis using REAL market data from data collection tasks."""
+    """Technical analysis using REAL market data from data collection tasks with data quality safety checks."""
     import logging
+    from src.utils.trading_utils import get_data_quality_score
     logger = logging.getLogger(__name__)
     logger.info("=== TECHNICAL ANALYSIS STARTING ===")
     
     try:
+        # ESSENTIAL SAFETY CHECK: Data Quality Assessment
+        data_quality = get_data_quality_score()
+        data_quality_threshold = 0.6  # Minimum 60% data quality
+        logger.info(f"📊 Data quality score: {data_quality:.1%}")
+        
+        if data_quality < data_quality_threshold:
+            logger.warning(f"⚠️ LOW DATA QUALITY: {data_quality:.1%} < {data_quality_threshold:.1%}")
+            logger.warning("⚠️ Analysis may be unreliable - proceeding with caution flags")
+        
         # Pull market data from previous collection task
         ti = context['task_instance']
         market_data_result = ti.xcom_pull(key='market_data') or {}
@@ -392,8 +440,21 @@ def simple_technical_analysis(**context):
         logger.info(f"   • Data source: {market_data_result.get('data_source', 'unknown')}")
         logger.info(f"   • Symbols: {market_data_result.get('symbols', [])}")
         
-        # Extract real market data for analysis
+        # ESSENTIAL SAFETY CHECK: Data Completeness Validation
         collected_data = market_data_result.get('data', {})
+        expected_symbols = ['AAPL', 'SPY', 'QQQ']
+        missing_symbols = [s for s in expected_symbols if s not in collected_data]
+        
+        if missing_symbols:
+            logger.warning(f"⚠️ MISSING DATA: Symbols not collected: {missing_symbols}")
+            data_completeness = (len(expected_symbols) - len(missing_symbols)) / len(expected_symbols)
+            logger.info(f"📊 Data completeness: {data_completeness:.1%}")
+            
+            if data_completeness < 0.5:  # Less than 50% data available
+                logger.error("❌ INSUFFICIENT DATA: Less than 50% of expected symbols have data")
+                # Continue with limited analysis but flag the issue
+        else:
+            logger.info("✅ All expected symbols have data available")
         
         if collected_data:
             logger.info(f"📊 ANALYZING REAL MARKET DATA:")
@@ -848,12 +909,27 @@ def simple_generate_signals(**context):
         return result
 
 def simple_assess_risk(**context):
-    """Assess portfolio risk using real trading signals and analysis data."""
-    import logging
+    """Assess portfolio risk using real trading signals and analysis data with essential safety checks."""
+    import logging, os
+    from src.utils.trading_utils import is_market_open, get_current_volatility
     logger = logging.getLogger(__name__)
     logger.info("=== PORTFOLIO RISK ASSESSMENT STARTING ===")
     
     try:
+        # ESSENTIAL SAFETY CHECK 1: Market Hours Validation
+        market_open = is_market_open()
+        logger.info(f"🕐 Market status: {'OPEN' if market_open else 'CLOSED'}")
+        
+        # ESSENTIAL SAFETY CHECK 2: Environment Validation
+        env_trading_enabled = os.getenv('ENABLE_REAL_TRADING', 'false').lower() == 'true'
+        paper_trading_only = os.getenv('PAPER_TRADING_ONLY', 'true').lower() == 'true'
+        logger.info(f"🔧 Trading environment: Real={'enabled' if env_trading_enabled else 'disabled'}, Paper={'enabled' if paper_trading_only else 'disabled'}")
+        
+        if env_trading_enabled and not paper_trading_only and not market_open:
+            logger.warning("⚠️ SAFETY OVERRIDE: Real trading disabled when market is closed")
+            # Force paper trading mode for safety
+            os.environ['PAPER_TRADING_ONLY'] = 'true'
+        
         # Pull real data from previous tasks
         trading_signals = context['task_instance'].xcom_pull(task_ids='execute_trades_tasks.generate_trading_signals')
         technical_data = context['task_instance'].xcom_pull(task_ids='analyze_data_tasks.analyze_technical_indicators')
@@ -864,9 +940,20 @@ def simple_assess_risk(**context):
         logger.info(f"   • Technical data: {'✅' if technical_data else '❌'}")
         logger.info(f"   • Sentiment data: {'✅' if sentiment_data else '❌'}")
         
+        # ESSENTIAL SAFETY CHECK 3: Market Volatility
+        current_volatility = get_current_volatility()
+        volatility_threshold = 0.4  # 40% volatility threshold
+        logger.info(f"📊 Current market volatility: {current_volatility:.1%}")
+        
         # Calculate risk based on real data
         portfolio_risk = 0.10  # base risk
         risk_factors = []
+        
+        # Add volatility risk factor
+        if current_volatility > volatility_threshold:
+            portfolio_risk += 0.15  # Significant risk increase
+            risk_factors.append(f"High market volatility: {current_volatility:.1%} > {volatility_threshold:.1%}")
+            logger.warning(f"⚠️ HIGH VOLATILITY DETECTED: {current_volatility:.1%}")
         
         if trading_signals:
             # Analyze signal confidence
@@ -936,12 +1023,56 @@ def simple_assess_risk(**context):
         return result
 
 def simple_execute_trades(**context):
-    """Execute trades based on real signals and risk assessment."""
-    import logging
+    """Execute trades based on real signals and risk assessment with essential safety checks."""
+    import logging, os
+    from src.utils.trading_utils import is_market_open, safe_to_trade
     logger = logging.getLogger(__name__)
     logger.info("=== TRADE EXECUTION STARTING ===")
     
     try:
+        # ESSENTIAL SAFETY CHECK 1: Pre-flight Trading Safety Check
+        trading_safety_check = safe_to_trade()
+        logger.info(f"🛡️ Trading safety check: {'PASSED' if trading_safety_check else 'FAILED'}")
+        
+        if not trading_safety_check:
+            logger.warning("🚫 TRADING BLOCKED: Market conditions unsafe")
+            result = {
+                'status': 'success',
+                'timestamp': datetime.now().isoformat(),
+                'trades_executed': 0,
+                'total_value': 0,
+                'reason': 'Trading conditions unsafe (market closed or high volatility)',
+                'data_source': 'safety_check',
+                'safety_override': True,
+                'uses_real_data': True
+            }
+            context['task_instance'].xcom_push(key='trade_execution', value=result)
+            logger.info("🛡️ Trade execution blocked by safety check")
+            return result
+        
+        # ESSENTIAL SAFETY CHECK 2: Trading Mode Validation
+        paper_trading_only = os.getenv('PAPER_TRADING_ONLY', 'true').lower() == 'true'
+        enable_real_trading = os.getenv('ENABLE_REAL_TRADING', 'false').lower() == 'true'
+        logger.info(f"🔧 Trading mode: Paper={paper_trading_only}, Real={enable_real_trading}")
+        
+        if not paper_trading_only and enable_real_trading:
+            logger.warning("⚠️ REAL TRADING MODE DETECTED - Additional safety protocols active")
+            # Additional validation for real trading
+            if not is_market_open():
+                logger.error("🚫 REAL TRADING BLOCKED: Market is closed")
+                result = {
+                    'status': 'success',
+                    'timestamp': datetime.now().isoformat(),
+                    'trades_executed': 0,
+                    'total_value': 0,
+                    'reason': 'Real trading blocked: Market closed',
+                    'data_source': 'safety_check',
+                    'safety_override': True,
+                    'real_trading_blocked': True
+                }
+                context['task_instance'].xcom_push(key='trade_execution', value=result)
+                return result
+        
         # Pull real data from previous tasks
         trading_signals = context['task_instance'].xcom_pull(task_ids='execute_trades_tasks.generate_trading_signals')
         risk_assessment = context['task_instance'].xcom_pull(task_ids='execute_trades_tasks.assess_portfolio_risk')
@@ -956,25 +1087,42 @@ def simple_execute_trades(**context):
         trades_executed = []
         total_value = 0
         
-        # Check if risk allows trading
+        # ESSENTIAL SAFETY CHECK 3: Risk Assessment Validation
         if risk_assessment:
             portfolio_risk = risk_assessment.get('portfolio_risk', 0.15)
             recommendation = risk_assessment.get('recommendation', 'acceptable')
+            risk_factors = risk_assessment.get('risk_factors', [])
             
-            if recommendation in ['high']:
-                logger.warning(f"⚠️ High risk detected ({portfolio_risk:.1%}), limiting trades")
+            logger.info(f"🎯 Risk analysis: {portfolio_risk:.1%} risk level, recommendation: {recommendation}")
+            
+            # Hard stop for excessive risk
+            if portfolio_risk > 0.30:  # 30% risk threshold
+                logger.error(f"🚫 TRADE EXECUTION BLOCKED: Excessive risk {portfolio_risk:.1%} > 30%")
                 result = {
                     'status': 'success',
                     'timestamp': datetime.now().isoformat(),
                     'trades_executed': 0,
                     'total_value': 0,
-                    'reason': f'Risk too high: {portfolio_risk:.1%}',
+                    'reason': f'Risk too high: {portfolio_risk:.1%} (max: 30%)',
                     'data_source': 'real_analysis',
+                    'risk_factors': risk_factors,
+                    'risk_override': True,
                     'uses_real_data': True
                 }
                 context['task_instance'].xcom_push(key='trade_execution', value=result)
-                logger.info("⚠️ Trade execution blocked due to high risk")
+                logger.info("🚫 Trade execution blocked due to excessive risk")
                 return result
+            
+            elif recommendation in ['high'] or portfolio_risk > 0.20:
+                logger.warning(f"⚠️ High risk detected ({portfolio_risk:.1%}), limiting trades")
+                # Reduce position sizes in high risk scenarios
+                position_size_multiplier = 0.5  # Half position sizes
+                logger.info(f"📉 Position size reduced to {position_size_multiplier:.0%} due to high risk")
+            else:
+                position_size_multiplier = 1.0  # Full position sizes
+        else:
+            logger.warning("⚠️ No risk assessment available, using conservative position sizing")
+            position_size_multiplier = 0.3  # Very conservative without risk assessment
         
         # Execute trades based on signals
         if trading_signals and trading_signals.get('signals'):

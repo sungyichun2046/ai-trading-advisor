@@ -15,32 +15,23 @@ logger = logging.getLogger(__name__)
 def is_market_open() -> bool:
     """
     Check if the stock market is currently open.
-    
-    Simple implementation checking US market hours (9:30 AM - 4:00 PM EST).
-    In production, this could be enhanced with holiday checking.
+    Uses the more complete implementation from environment_utils.
     
     Returns:
         bool: True if market is open, False otherwise
     """
     try:
-        # Get current time (assuming EST/EDT for US markets)
+        from .environment_utils import is_market_open as env_is_market_open
+        return env_is_market_open()
+    except ImportError:
+        logger.warning("Could not import environment_utils, using fallback logic")
+        # Fallback to simple logic if environment_utils not available
         now = datetime.now().time()
-        
-        # Market hours: 9:30 AM to 4:00 PM
-        market_open = time(9, 30)  # 9:30 AM
-        market_close = time(16, 0)  # 4:00 PM
-        
-        # Check if current time is within market hours
+        market_open = time(9, 30)
+        market_close = time(16, 0)
         is_open = market_open <= now <= market_close
-        
-        # Check if it's a weekday (Monday=0, Sunday=6)
         is_weekday = datetime.now().weekday() < 5
-        
         return is_open and is_weekday
-        
-    except Exception as e:
-        logger.warning(f"Error checking market hours: {e}, defaulting to open")
-        return True  # Default to allowing trades if check fails
 
 
 def get_current_volatility() -> float:

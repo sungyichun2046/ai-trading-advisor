@@ -1,47 +1,46 @@
 version: '3.8'
 
 services:
-  # PostgreSQL (Airflow metadata DB)
-  # Environment variable configurable for test/production separation
-  postgres:
+  # PostgreSQL (Airflow metadata DB) - TEST ENVIRONMENT
+  test-postgres:
     image: postgres:15-alpine
     environment:
       POSTGRES_USER: airflow
       POSTGRES_PASSWORD: airflow
-      POSTGRES_DB: ${POSTGRES_DB:-airflow}  # Default to 'airflow', override with POSTGRES_DB
+      POSTGRES_DB: ${POSTGRES_DB:-airflow_test}  # Test database
       POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - test_postgres_data:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "5433:5432"  # Different port to avoid conflicts
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U airflow"]
       interval: 5s
       timeout: 5s
       retries: 5
 
-  # Redis for Airflow
-  redis:
+  # Redis for Airflow - TEST ENVIRONMENT
+  test-redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "6380:6379"  # Different port to avoid conflicts
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
 
-  # Airflow Webserver
-  airflow-webserver:
+  # Airflow Webserver - TEST ENVIRONMENT
+  test-airflow-webserver:
     build:
       context: .
       dockerfile: Dockerfile.airflow
     depends_on:
-      - postgres
-      - redis
+      - test-postgres
+      - test-redis
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/${POSTGRES_DB:-airflow}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@test-postgres:5432/${POSTGRES_DB:-airflow_test}
       AIRFLOW__CORE__FERNET_KEY: ''
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
       AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
@@ -51,19 +50,19 @@ services:
       _AIRFLOW_WWW_USER_CREATE: 'true' 
       _AIRFLOW_WWW_USER_USERNAME: admin
       _AIRFLOW_WWW_USER_PASSWORD: admin
-      # Environment configurable variables
+      # Test environment variables
       USE_REAL_DATA: ${USE_REAL_DATA:-false}
       NEWSAPI_KEY: ${NEWSAPI_KEY:-}
-      POSTGRES_HOST: ${POSTGRES_HOST:-localhost}
-      POSTGRES_DB: ${POSTGRES_DB:-airflow}
+      POSTGRES_HOST: ${POSTGRES_HOST:-test-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-airflow_test}
       POSTGRES_USER: ${POSTGRES_USER:-airflow}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airflow}
     volumes:
       - ./src/dags:/opt/airflow/dags:ro
       - ./src:/opt/airflow/src:ro
-      - airflow_logs:/opt/airflow/logs
+      - test_airflow_logs:/opt/airflow/logs
     ports:
-      - "${AIRFLOW_PORT:-8080}:8080"  # Default 8080, override with AIRFLOW_PORT
+      - "${AIRFLOW_PORT:-8081}:8080"  # Default test port 8081
     command: webserver
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
@@ -72,51 +71,34 @@ services:
       retries: 5
     restart: always
 
-  # Airflow Scheduler
-  airflow-scheduler:
+  # Airflow Scheduler - TEST ENVIRONMENT
+  test-airflow-scheduler:
     build:
       context: .
       dockerfile: Dockerfile.airflow
     depends_on:
-      - airflow-webserver
+      - test-airflow-webserver
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres:5432/${POSTGRES_DB:-airflow}
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@test-postgres:5432/${POSTGRES_DB:-airflow_test}
       AIRFLOW__CORE__FERNET_KEY: ''
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
       AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
       PYTHONPATH: '/opt/airflow'
-      # Environment configurable variables
+      # Test environment variables
       USE_REAL_DATA: ${USE_REAL_DATA:-false}
       NEWSAPI_KEY: ${NEWSAPI_KEY:-}
-      POSTGRES_HOST: ${POSTGRES_HOST:-localhost}
-      POSTGRES_DB: ${POSTGRES_DB:-airflow}
+      POSTGRES_HOST: ${POSTGRES_HOST:-test-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-airflow_test}
       POSTGRES_USER: ${POSTGRES_USER:-airflow}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airflow}
     volumes:
       - ./src/dags:/opt/airflow/dags:ro
       - ./src:/opt/airflow/src:ro
-      - airflow_logs:/opt/airflow/logs
+      - test_airflow_logs:/opt/airflow/logs
     command: scheduler
     restart: always
 
-  # FastAPI Application
-  api:
-    build: .
-    ports:
-      - "8000:8000"
-    environment:
-      - DATABASE_URL=postgresql://airflow:airflow@postgres:5432/airflow
-      - REDIS_URL=redis://redis:6379/0
-      - PYTHONPATH=/app
-    volumes:
-      - ./src:/app/src
-    depends_on:
-      - postgres
-      - redis
-    command: ["python", "-m", "uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
-    restart: always
-
 volumes:
-  postgres_data:
-  airflow_logs:
+  test_postgres_data:
+  test_airflow_logs:

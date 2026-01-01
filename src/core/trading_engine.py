@@ -23,7 +23,6 @@ except ImportError:
     class MockSettings:
         DATABASE_URL = "postgresql://airflow:airflow@test-postgres:5432/airflow"
         REDIS_URL = "redis://localhost:6379"
-        USE_REAL_DATA = False
         API_TIMEOUT = 30
         MAX_RETRIES = 3
     settings = MockSettings()

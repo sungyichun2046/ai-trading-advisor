@@ -1,21 +1,31 @@
 """
-Data Manager Module - Consolidated data collection, processing, storage, and monitoring.
+Data Manager Module - Consolidated data collection with simple LRU cache.
+Uses real APIs with @lru_cache decorators for simplicity and performance.
 """
 import logging, os, time, random, psycopg2, requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 from contextlib import contextmanager
+from functools import lru_cache
 import pandas as pd, numpy as np
+
+logger = logging.getLogger(__name__)
+
+# RealDataValidationError for USE_REAL_DATA=True enforcement
+class RealDataValidationError(Exception):
+    """Raised when USE_REAL_DATA=True but dummy data is used"""
+    pass
+
 # Try to import settings, fallback to environment variables
 try:
     from ..config import settings
 except ImportError:
     # Fallback for Airflow environment where config.py dependencies aren't available
     class Settings:
-        @property
-        def use_real_data(self): return os.getenv('USE_REAL_DATA', 'False').lower() == 'true'
         @property  
-        def newsapi_key(self): return os.getenv('NEWSAPI_KEY')
+        def newsapi_key(self): return os.getenv('NEWSAPI_KEY', '494b17bf8af14d7cbb2d62f1e8b11088')
+        @property
+        def use_real_data(self): return os.getenv('USE_REAL_DATA', 'false').lower() == 'true'
     settings = Settings()
 
 # Shared utilities with fallbacks
@@ -26,6 +36,7 @@ except ImportError:
     def log_performance(operation, start_time, end_time, status="success", metrics=None): return {"operation": operation, "status": status}
 
 # Optional imports
+# Optional imports
 try: import yfinance as yf; YFINANCE_AVAILABLE = True
 except ImportError: YFINANCE_AVAILABLE = False
 try: from newsapi import NewsApiClient; NEWSAPI_AVAILABLE = True
@@ -35,19 +46,94 @@ except ImportError: TRANSFORMERS_AVAILABLE = False
 try: from textblob import TextBlob; TEXTBLOB_AVAILABLE = True
 except ImportError: TEXTBLOB_AVAILABLE = False
 
-logger = logging.getLogger(__name__)
+# Simple LRU Cache decorators for API calls (5-minute windows)
+@lru_cache(maxsize=128)
+def fetch_market_data_cached(symbol: str, period: str, timeframe: str, time_window: int) -> Optional[Dict]:
+    """Cache market data for 5-minute windows. On market close/holiday, tries last trading day."""
+    try:
+        if not YFINANCE_AVAILABLE:
+            return None
+            
+        # First try regular period
+        hist = yf.Ticker(symbol).history(period=period, interval=timeframe)
+        if not hist.empty:
+            latest = hist.iloc[-1]
+            return {
+                "symbol": symbol, "status": "success", "price": round(float(latest['Close']), 2),
+                "volume": int(latest['Volume']) if not pd.isna(latest['Volume']) else 0,
+                "open": round(float(latest['Open']), 2), "high": round(float(latest['High']), 2),
+                "low": round(float(latest['Low']), 2), "close": round(float(latest['Close']), 2),
+                "timestamp": datetime.now().isoformat(), "data_source": "yfinance_cached"
+            }
+        
+        # If no data and market is closed, try longer period for last trading day
+        try:
+            from ..utils.environment_utils import is_market_open
+            if not is_market_open():
+                logger.info(f"Market closed - trying last trading day data for {symbol}")
+                # Try last 5 trading days to find recent data
+                hist_extended = yf.Ticker(symbol).history(period="5d", interval="1d")
+                if not hist_extended.empty:
+                    latest = hist_extended.iloc[-1]
+                    return {
+                        "symbol": symbol, "status": "success", "price": round(float(latest['Close']), 2),
+                        "volume": int(latest['Volume']) if not pd.isna(latest['Volume']) else 0,
+                        "open": round(float(latest['Open']), 2), "high": round(float(latest['High']), 2),
+                        "low": round(float(latest['Low']), 2), "close": round(float(latest['Close']), 2),
+                        "timestamp": datetime.now().isoformat(), 
+                        "data_source": "yfinance_last_trading_day",
+                        "market_closed_fallback": True
+                    }
+        except ImportError:
+            pass  # If environment_utils not available, skip market check
+            
+    except Exception as e:
+        logger.debug(f"Cached market data fetch failed for {symbol}: {e}")
+    return None
+
+@lru_cache(maxsize=64)
+def fetch_news_sentiment_cached(max_articles: int, time_window: int) -> Dict[str, Any]:
+    """Cache sentiment data for 30-minute windows"""
+    try:
+        newsapi_key = os.getenv('NEWSAPI_KEY')
+        if not newsapi_key or not NEWSAPI_AVAILABLE:
+            return {"status": "fallback", "data_source": "dummy"}
+        
+        newsapi_client = NewsApiClient(api_key=newsapi_key)
+        all_articles = []
+        for keyword in ["stock market", "earnings", "economy"]:
+            try:
+                response = newsapi_client.get_everything(
+                    q=keyword, language='en', sort_by='publishedAt', 
+                    page_size=max_articles//3
+                )
+                if response.get('status') == 'ok':
+                    all_articles.extend(response.get('articles', []))
+            except Exception as e:
+                logger.warning(f"NewsAPI failed for '{keyword}': {e}")
+        
+        return {
+            "status": "success" if all_articles else "fallback",
+            "articles": all_articles[:max_articles], 
+            "data_source": "newsapi_cached" if all_articles else "dummy"
+        }
+    except Exception as e:
+        logger.error(f"Cached news fetch failed: {e}")
+        return {"status": "fallback", "data_source": "dummy"}
 
 
 class DataManager:
-    """Consolidated data management system with monitoring capabilities."""
+    """
+    Consolidated data management system with simple LRU cache.
+    Uses real APIs with @lru_cache decorators for performance and simplicity.
+    """
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
         self.retry_attempts = 3
         self.retry_delay = 1
         
-        if not hasattr(settings, 'use_real_data'): raise ValueError("USE_REAL_DATA flag required in settings")
-        logger.info(f"DataManager initialized with USE_REAL_DATA={settings.use_real_data}")
+        logger.info("DataManager initialized with simple LRU caching")
         
         self.connection_params = {'host': os.getenv('POSTGRES_HOST', 'postgres'), 'port': os.getenv('POSTGRES_PORT', '5432'),
             'database': os.getenv('POSTGRES_DB', 'trading_advisor'), 'user': os.getenv('POSTGRES_USER', 'trader'),
@@ -55,9 +141,15 @@ class DataManager:
         
         self.sentiment_analyzer, self.sentiment_method, self.newsapi_client = None, "dummy", None
         self._setup_sentiment_analyzer()
-        if settings.use_real_data and hasattr(settings, 'newsapi_key') and settings.newsapi_key and NEWSAPI_AVAILABLE:
-            try: self.newsapi_client = NewsApiClient(api_key=settings.newsapi_key)
-            except Exception as e: logger.warning(f"Failed to initialize NewsAPI: {e}")
+        
+        # Initialize NewsAPI if available
+        newsapi_key = settings.newsapi_key if hasattr(settings, 'newsapi_key') else os.getenv('NEWSAPI_KEY')
+        if newsapi_key and NEWSAPI_AVAILABLE:
+            try: 
+                self.newsapi_client = NewsApiClient(api_key=newsapi_key)
+                logger.info("NewsAPI client initialized")
+            except Exception as e: 
+                logger.warning(f"Failed to initialize NewsAPI: {e}")
     
     def _setup_sentiment_analyzer(self) -> None:
         """Setup sentiment analyzer with fallbacks."""
@@ -67,55 +159,61 @@ class DataManager:
         self.sentiment_method = "textblob" if TEXTBLOB_AVAILABLE else "dummy"
     
     def collect_market_data(self, symbols: List[str], timeframe: str = "1d", period: str = "1mo") -> Dict[str, Any]:
-        """Collect market data for specified symbols."""
-        logger.info(f"Collecting market data for {len(symbols)} symbols")
+        """
+        Collect market data with simple LRU caching.
+        Uses 5-minute cache windows for optimal performance.
+        """
+        logger.info(f"Collecting market data for {len(symbols)} symbols with LRU caching")
         collected_data, errors = {}, []
+        
+        # 5-minute cache windows
+        time_window = int(time.time() // 300)
         
         for symbol in symbols:
             try:
-                data = self._generate_dummy_market_data(symbol, period) if not settings.use_real_data else self._collect_yfinance_data(symbol, period, timeframe)
-                if data: collected_data[symbol] = data
-                else: errors.append(f"Failed to collect data for {symbol}")
-            except Exception as e: logger.error(f"Error collecting {symbol}: {e}"); errors.append(f"Error for {symbol}: {str(e)}")
-        
-        return {"status": "success" if collected_data else "failed", "data": collected_data, "errors": errors,
-                "timestamp": datetime.now().isoformat(), "symbols_collected": len(collected_data), "total_symbols": len(symbols)}
-    
-    def _collect_yfinance_data(self, symbol: str, period: str = "1mo", interval: str = "15m") -> Optional[Dict]:
-        """Collect data using Yahoo Finance API with fallbacks."""
-        for attempt in range(self.retry_attempts):
-            try:
-                result = self._collect_yahoo_direct(symbol)
-                if result: return result
+                # Use LRU cached function
+                data = fetch_market_data_cached(symbol, period, timeframe, time_window)
                 
-                if YFINANCE_AVAILABLE:
-                    hist = yf.Ticker(symbol).history(period=period, interval=interval)
-                    if not hist.empty:
-                        latest = hist.iloc[-1]
-                        return {"symbol": symbol, "status": "success", "price": round(float(latest['Close']), 2), "volume": int(latest['Volume']) if not pd.isna(latest['Volume']) else 0,
-                               "open": round(float(latest['Open']), 2), "high": round(float(latest['High']), 2), "low": round(float(latest['Low']), 2), "close": round(float(latest['Close']), 2),
-                               "timestamp": datetime.now().isoformat(), "data_source": "yfinance"}
-            except Exception as e:
-                if attempt < self.retry_attempts - 1: time.sleep(self.retry_delay)
-        return self._generate_dummy_market_data(symbol)
+                if data:
+                    # Validate if USE_REAL_DATA=True (allow cached real data)
+                    if settings.use_real_data and data.get('data_source') == 'dummy':
+                        raise RealDataValidationError(
+                            f"USE_REAL_DATA=True but dummy data was used for {symbol}. "
+                            f"Real API failed and fallback dummy data violates USE_REAL_DATA policy."
+                        )
+                    collected_data[symbol] = data
+                    logger.info(f"Successfully collected data for {symbol} from {data.get('data_source')}")
+                else:
+                    # Generate fallback data
+                    fallback_data = self._generate_dummy_market_data(symbol)
+                    if settings.use_real_data:
+                        raise RealDataValidationError(
+                            f"USE_REAL_DATA=True but only dummy data available for {symbol}. "
+                            f"Real API failed and fallback dummy data violates USE_REAL_DATA policy."
+                        )
+                    collected_data[symbol] = fallback_data
+                    errors.append(f"Used fallback data for {symbol}")
+                    
+            except RealDataValidationError:
+                raise  # Re-raise validation errors to fail fast
+            except Exception as e: 
+                logger.error(f"Error collecting {symbol}: {e}"); 
+                errors.append(f"Error for {symbol}: {str(e)}")
+        
+        result = {
+            "status": "success" if collected_data else "failed", 
+            "data": collected_data, 
+            "errors": errors,
+            "timestamp": datetime.now().isoformat(), 
+            "symbols_collected": len(collected_data), 
+            "total_symbols": len(symbols),
+            "caching_enabled": True,  # LRU cache always enabled
+            "cache_info": fetch_market_data_cached.cache_info()._asdict()
+        }
+        
+        logger.info(f"Market data collection completed: {len(collected_data)}/{len(symbols)} symbols successful")
+        return result
     
-    def _collect_yahoo_direct(self, symbol: str) -> Optional[Dict]:
-        """Collect data directly from Yahoo Finance API."""
-        try:
-            response = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
-                                  headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-            data = response.json()['chart']['result'][0]
-            quotes = data['indicators']['quote'][0]
-            
-            if data['timestamp'] and quotes['close']:
-                close_price = quotes['close'][-1]
-                return {"symbol": symbol, "status": "success", "price": round(float(close_price), 2),
-                       "volume": int(quotes['volume'][-1] or 0), "open": round(float(quotes['open'][-1] or close_price), 2),
-                       "high": round(float(quotes['high'][-1] or close_price), 2), "low": round(float(quotes['low'][-1] or close_price), 2),
-                       "close": round(float(close_price), 2), "timestamp": datetime.fromtimestamp(data['timestamp'][-1]).isoformat(),
-                       "market_cap": data['meta'].get('marketCap'), "data_source": "yahoo_direct"}
-        except Exception as e: logger.debug(f"Yahoo API failed for {symbol}: {e}")
-        return None
     
     def _generate_dummy_market_data(self, symbol: str, period: str = "1mo") -> Dict:
         """Generate dummy market data."""
@@ -225,27 +323,78 @@ class DataManager:
                "quick_ratio": round(random.uniform(0.8, 2.5), 2), "timestamp": datetime.now().isoformat(), "data_source": "dummy"}
     
     def collect_sentiment_data(self, symbols: Optional[List[str]] = None, max_articles: int = 50) -> Dict[str, Any]:
-        """Collect news data and sentiment analysis."""
-        logger.info(f"Collecting news sentiment data (max {max_articles} articles)")
-        if not settings.use_real_data or not self.newsapi_client: return self._generate_dummy_news_sentiment(max_articles)
+        """
+        Collect news sentiment data with simple LRU caching.
+        Uses 30-minute cache windows for news data.
+        """
+        logger.info(f"Collecting news sentiment data (max {max_articles} articles) with LRU caching")
+        
+        # 30-minute cache windows for news data
+        time_window = int(time.time() // 1800)
+        
         try:
-            articles, processed_articles = self._collect_newsapi_data(max_articles), []
-            for article in articles:
-                sentiment = self._analyze_sentiment(article.get('title', '') + ' ' + article.get('description', ''))
-                processed_articles.append({"title": article.get('title', ''), "content": article.get('description', ''), "url": article.get('url', ''), "source": article.get('source', {}).get('name', ''),
-                                         "published_at": article.get('publishedAt', ''), "sentiment_score": sentiment['score'], "sentiment_label": sentiment['label'], "timestamp": datetime.now().isoformat()})
-            return {"status": "success", "articles": processed_articles, "article_count": len(processed_articles), "sentiment_method": self.sentiment_method, "timestamp": datetime.now().isoformat()}
-        except Exception as e: logger.error(f"Failed to collect news sentiment: {e}"); return self._generate_dummy_news_sentiment(max_articles)
+            # Use LRU cached function
+            cached_result = fetch_news_sentiment_cached(max_articles, time_window)
+            
+            if cached_result.get("status") == "success":
+                # Process articles with sentiment analysis
+                processed_articles = []
+                for article in cached_result.get("articles", []):
+                    sentiment = self._analyze_sentiment(
+                        article.get('title', '') + ' ' + article.get('description', '')
+                    )
+                    processed_articles.append({
+                        "title": article.get('title', ''), 
+                        "content": article.get('description', ''), 
+                        "url": article.get('url', ''), 
+                        "source": article.get('source', {}).get('name', ''),
+                        "published_at": article.get('publishedAt', ''), 
+                        "sentiment_score": sentiment['score'], 
+                        "sentiment_label": sentiment['label'], 
+                        "timestamp": datetime.now().isoformat()
+                    })
+                
+                result = {
+                    "status": "success", 
+                    "articles": processed_articles, 
+                    "article_count": len(processed_articles), 
+                    "sentiment_method": self.sentiment_method, 
+                    "timestamp": datetime.now().isoformat(),
+                    "caching_enabled": True,
+                    "data_source": cached_result.get("data_source", "newsapi_cached"),
+                    "cache_info": fetch_news_sentiment_cached.cache_info()._asdict()
+                }
+                
+                # Validate if USE_REAL_DATA=True, early stop and raise error
+                if settings.use_real_data and result.get('data_source') == 'dummy':
+                    raise RealDataValidationError(
+                        f"USE_REAL_DATA=True but dummy sentiment data was used. "
+                        f"Check NewsAPI key and connectivity. DAG will fail fast."
+                    )
+                
+                return result
+            
+            # Fallback to dummy data
+            fallback_result = self._generate_dummy_news_sentiment(max_articles)
+            if settings.use_real_data:
+                raise RealDataValidationError(
+                    f"USE_REAL_DATA=True but only dummy sentiment data available. "
+                    f"Real NewsAPI failed and fallback dummy data violates USE_REAL_DATA policy."
+                )
+            return fallback_result
+            
+        except RealDataValidationError:
+            raise  # Re-raise validation errors to fail fast
+        except Exception as e: 
+            logger.error(f"Failed to collect sentiment data: {e}")
+            fallback_result = self._generate_dummy_news_sentiment(max_articles)
+            if settings.use_real_data:
+                raise RealDataValidationError(
+                    f"USE_REAL_DATA=True but exception occurred: {str(e)}. "
+                    f"Cannot provide real data, DAG will fail fast."
+                )
+            return fallback_result
     
-    def _collect_newsapi_data(self, max_articles: int = 50) -> List[Dict]:
-        """Collect news using NewsAPI."""
-        keywords, all_articles = ["stock market", "earnings", "economy"], []
-        for keyword in keywords:
-            try:
-                response = self.newsapi_client.get_everything(q=keyword, language='en', sort_by='publishedAt', page_size=max_articles//len(keywords))
-                if response.get('status') == 'ok': all_articles.extend(response.get('articles', []))
-            except Exception as e: logger.warning(f"Failed news for '{keyword}': {e}")
-        return all_articles[:max_articles]
     
     def _analyze_sentiment(self, text: str) -> Dict[str, Any]:
         """Analyze sentiment of text."""

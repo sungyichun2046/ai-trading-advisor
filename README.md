@@ -1003,3 +1003,22 @@ ai-trading-advisor/
 
 **Result: 12 Python files instead of 59+ files (80% reduction)**
 **Streamlined: 3 DAGs, 3 core modules, 6 test files - all functionality preserved**
+**To access Airflow on port 8080 to see scheduled Dag run Github Action:**
+  ```
+  Local Development:
+
+  # Start Airflow locally to check dag run triggered by CI
+  `AIRFLOW_PORT=8080 POSTGRES_DB=airflow docker compose up -d`
+
+  # Access in browser
+  http://localhost:8080
+  ```
+## Production vs Test Configuration
+```
+  | Setting  | Production (GitHub Actions) | Test (check_dags.sh) |
+  |----------|-----------------------------|----------------------|
+  | Port     | 8080 (default)              | 8081                 |
+  | Database | airflow (default)           | airflow_test         |
+  | Data     | USE_REAL_DATA=false         | USE_REAL_DATA=true   |
+  | Usage    | Automated/Scheduled         | Manual testing       |
+```

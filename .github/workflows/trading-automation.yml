@@ -4,6 +4,13 @@ on:
   push:
     branches:
       - main  # or your target branch
+    paths:
+      - 'Dockerfile.airflow'          # Rebuild when Dockerfile changes
+      - 'requirements-airflow.txt'    # Rebuild when dependencies change
+      - 'src/**'                      # Rebuild when source code changes
+      - '.github/workflows/**'        # Rebuild when workflow changes
+      - '!README.md'                  # Exclude README changes
+      - '!docs/**'                    # Exclude documentation
   # 5 scheduled runs per day during market hours
   #schedule:
   #  - cron: '*/3 * * * *' # every 3 minute, for test
@@ -22,10 +29,13 @@ on:
   workflow_dispatch:
 
 # PRODUCTION ENVIRONMENT VARIABLES
-# Uses docker-compose.yml with default port 8080
+# Uses docker-compose.yml with production settings
 env:
   PYTHONPATH: ${{ github.workspace }}/src
   ENVIRONMENT: production
+  AIRFLOW_PORT: 8080
+  POSTGRES_DB: airflow
+  USE_REAL_DATA: false
   NEWSAPI_KEY: ${{ secrets.NEWSAPI_KEY }}
 
 jobs:
@@ -36,6 +46,53 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2  # Needed for changed-files detection
+
+      - name: Check for Docker-related changes
+        id: docker-changes
+        run: |
+          echo "Checking for Docker-related file changes..."
+          
+          # Check if Dockerfile.airflow or requirements-airflow.txt changed
+          DOCKER_CHANGES=$(git diff --name-only HEAD~1 HEAD | grep -E "(Dockerfile\.airflow|requirements-airflow\.txt)" || echo "")
+          
+          if [ -n "$DOCKER_CHANGES" ]; then
+            echo "🔄 Docker rebuild needed due to changes in:"
+            echo "$DOCKER_CHANGES"
+            echo "rebuild=true" >> $GITHUB_OUTPUT
+          else
+            echo "✅ No Docker rebuild needed"
+            echo "rebuild=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set up Docker Buildx (conditional)
+        if: steps.docker-changes.outputs.rebuild == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker images (conditional)
+        if: steps.docker-changes.outputs.rebuild == 'true'
+        env:
+          DOCKER_BUILDKIT: 1
+        run: |
+          echo "🔨 Building Airflow Docker images due to dependency changes..."
+          docker build -f Dockerfile.airflow -t ai-trading-advisor-airflow-webserver:latest .
+          docker tag ai-trading-advisor-airflow-webserver:latest ai-trading-advisor-airflow-scheduler:latest
+          echo "✅ Docker images built successfully"
+
+      - name: Build Summary
+        run: |
+          echo "📋 BUILD SUMMARY"
+          echo "==============="
+          echo "Docker Rebuild Required: ${{ steps.docker-changes.outputs.rebuild }}"
+          if [ "${{ steps.docker-changes.outputs.rebuild }}" = "true" ]; then
+            echo "🔨 Fresh Docker images built due to dependency changes"
+            echo "📦 Images tagged for webserver and scheduler"
+            echo "💡 Next run will skip rebuild if no dependency changes"
+          else
+            echo "♻️ Using existing Docker images (no dependency changes)"
+            echo "💚 Saved ~2-3 minutes by skipping rebuild"
+          fi
 
       - name: Validate environment variables
         run: |
@@ -52,25 +109,42 @@ jobs:
 
       - name: Start Airflow services (PRODUCTION)
         env:
+          AIRFLOW_PORT: ${{ env.AIRFLOW_PORT }}
+          POSTGRES_DB: ${{ env.POSTGRES_DB }}
+          USE_REAL_DATA: ${{ env.USE_REAL_DATA }}
           NEWSAPI_KEY: ${{ env.NEWSAPI_KEY }}
           ENVIRONMENT: ${{ env.ENVIRONMENT }}
+          DOCKER_REBUILD: ${{ steps.docker-changes.outputs.rebuild }}
         run: |
-          echo "🏭 Starting Airflow services with intelligent caching (port 8080)..."
+          echo "🏭 Starting PRODUCTION Airflow services..."
+          echo "Port: $AIRFLOW_PORT"
+          echo "Database: $POSTGRES_DB"
+          echo "USE_REAL_DATA: $USE_REAL_DATA"
           echo "ENVIRONMENT: $ENVIRONMENT"
-          echo "Intelligent caching: Enabled with multi-layer strategy"
+          echo "Docker Rebuild: $DOCKER_REBUILD"
           
-          # Export environment variables for docker-compose.yml (production)
+          # Export environment variables for docker-compose.yml
+          export AIRFLOW_PORT=$AIRFLOW_PORT
+          export POSTGRES_DB=$POSTGRES_DB
+          export USE_REAL_DATA=$USE_REAL_DATA
           export NEWSAPI_KEY=$NEWSAPI_KEY
           export ENVIRONMENT=$ENVIRONMENT
           
+          # Start supporting services first
           docker compose up -d postgres redis
           
           # Wait for databases to be ready
           echo "Waiting for databases..."
           timeout 60s bash -c 'until docker compose exec -T postgres pg_isready -U airflow; do sleep 2; done'
           
-          # Start Airflow services
-          docker compose up -d airflow-webserver airflow-scheduler
+          # Start Airflow services (will use rebuilt images if available)
+          if [ "$DOCKER_REBUILD" = "true" ]; then
+            echo "🔄 Starting Airflow with freshly built images..."
+            docker compose up -d --force-recreate airflow-webserver airflow-scheduler
+          else
+            echo "♻️ Starting Airflow with existing images..."
+            docker compose up -d airflow-webserver airflow-scheduler
+          fi
           
           # Wait for Airflow to be ready
           echo "Waiting for Airflow..."
@@ -111,14 +185,21 @@ jobs:
 
       - name: Trigger airflow dag (PRODUCTION)
         env:
+          AIRFLOW_PORT: ${{ env.AIRFLOW_PORT }}
+          POSTGRES_DB: ${{ env.POSTGRES_DB }}
+          USE_REAL_DATA: ${{ env.USE_REAL_DATA }}
           NEWSAPI_KEY: ${{ env.NEWSAPI_KEY }}
           ENVIRONMENT: ${{ env.ENVIRONMENT }}
         run: |
           execution_date=$(date -u +"%Y-%m-%dT%H:%M:%S")
-          echo "🏭 Triggering intelligent caching workflow at: $execution_date (port 8080)"
-          echo "Environment: ENVIRONMENT=$ENVIRONMENT, Caching=Enabled"
+          echo "🏭 Triggering PRODUCTION workflow at: $execution_date"
+          echo "Port: $AIRFLOW_PORT, Database: $POSTGRES_DB"
+          echo "USE_REAL_DATA: $USE_REAL_DATA, ENVIRONMENT: $ENVIRONMENT"
           
-          # Export environment variables for docker-compose.yml (production)
+          # Export environment variables for docker-compose.yml
+          export AIRFLOW_PORT=$AIRFLOW_PORT
+          export POSTGRES_DB=$POSTGRES_DB
+          export USE_REAL_DATA=$USE_REAL_DATA
           export NEWSAPI_KEY=$NEWSAPI_KEY
           export ENVIRONMENT=$ENVIRONMENT
           

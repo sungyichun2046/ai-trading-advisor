@@ -4,7 +4,7 @@
 #
 # Steps:
 #   1. Test local DAG import (single consolidated DAG)
-#   2. Start production environment: docker compose up -d
+#   2. Start test environment: docker compose up -d  
 #   3. Trigger single trading_workflow DAG
 #   4. Validate task group execution: collect_data_tasks → analyze_data_tasks → execute_trades_tasks
 #   5. Check task completion and workflow success
@@ -15,6 +15,7 @@
 # Usage:
 #   ./check_dags.sh                    # Default: Test consolidated DAG workflow
 #   ./check_dags.sh --timeout=N        # Set custom timeout
+#   ./check_dags.sh --real-data        # Enable real API data collection
 #
 # Consolidated DAG Mode:
 #   • Single trading_workflow DAG with 3 task groups
@@ -74,11 +75,18 @@ else
 fi
 echo ""
 
-# Set environment for testing (same database, different port)
-export POSTGRES_HOST=localhost
-export POSTGRES_DB=airflow
-export POSTGRES_USER=airflow
-export POSTGRES_PASSWORD=airflow
+# Test environment configuration (different from production)
+# Use local variables to avoid polluting the shell environment
+TEST_AIRFLOW_PORT=8081
+TEST_POSTGRES_HOST=localhost
+TEST_POSTGRES_DB=airflow_test  
+TEST_POSTGRES_USER=airflow
+TEST_POSTGRES_PASSWORD=airflow
+
+# Helper function for docker compose commands with test environment
+run_test_docker_compose() {
+    AIRFLOW_PORT=$TEST_AIRFLOW_PORT POSTGRES_DB=$TEST_POSTGRES_DB POSTGRES_HOST=$TEST_POSTGRES_HOST POSTGRES_USER=$TEST_POSTGRES_USER POSTGRES_PASSWORD=$TEST_POSTGRES_PASSWORD docker compose -f docker-compose.test.yml "$@"
+}
 
 # Configure data collection mode
 if [ "$REAL_DATA_MODE" = true ]; then
@@ -89,6 +97,11 @@ else
     export USE_REAL_DATA=False
     echo "🟢 Environment configured for DUMMY DATA collection"
 fi
+
+echo "🔄 Test Environment:"
+echo "  • Port: $TEST_AIRFLOW_PORT (vs production 8080)"
+echo "  • Database: $TEST_POSTGRES_DB (vs production airflow)"
+echo "  • USE_REAL_DATA: $USE_REAL_DATA"
 
 echo "📁 Test DAG Folder: $(pwd)/src/dags"
 echo "📁 Expected: Single trading_dag.py with task groups"
@@ -249,11 +262,11 @@ echo "🐳 STARTING DOCKER ENVIRONMENT (PORT 8081)"
 echo "=========================================="
 
 echo "🛑 Stopping any running services..."
-docker compose down 2>/dev/null || true
+run_test_docker_compose down 2>/dev/null || true
 
-echo "🚀 Starting Airflow environment on port 8081..."
-export AIRFLOW_PORT=8081
-docker compose up -d
+echo "🚀 Starting Airflow test environment..."
+echo "   Port: $TEST_AIRFLOW_PORT, Database: $TEST_POSTGRES_DB, USE_REAL_DATA: $USE_REAL_DATA"
+run_test_docker_compose up -d
 
 echo "⏳ Waiting for Airflow to initialize (port 8081)..."
 sleep 60
@@ -291,7 +304,7 @@ echo "======================================="
 
 # Check for DAG import errors - EARLY STOP if any found
 echo "🧪 Checking for DAG import errors..."
-import_errors=$(docker compose exec airflow-webserver airflow dags list-import-errors 2>/dev/null)
+import_errors=$(run_test_docker_compose exec test-airflow-webserver airflow dags list-import-errors 2>/dev/null)
 
 if [[ "$import_errors" == *"No data found"* ]]; then
     echo "✅ SUCCESS: No DAG import errors found!"
@@ -311,11 +324,11 @@ fi
 # Verify consolidated DAG is loaded
 echo ""
 echo "📋 Verifying consolidated DAG..."
-loaded_dags=$(docker compose exec airflow-webserver airflow dags list 2>/dev/null | grep "trading_workflow" | wc -l)
+loaded_dags=$(run_test_docker_compose exec test-airflow-webserver airflow dags list 2>/dev/null | grep "trading_workflow" | wc -l)
 
 if [ "$loaded_dags" -eq 1 ]; then
     echo "✅ SUCCESS: Consolidated trading_workflow DAG is loaded"
-    dag_details=$(docker compose exec airflow-webserver airflow dags list 2>/dev/null | grep "trading_workflow")
+    dag_details=$(run_test_docker_compose exec test-airflow-webserver airflow dags list 2>/dev/null | grep "trading_workflow")
     echo "Loaded DAG:"
     echo "$dag_details"
 else
@@ -330,7 +343,7 @@ echo "=================================="
 
 # Unpause the consolidated DAG
 echo "📋 Unpausing trading_workflow DAG..."
-docker compose exec airflow-webserver airflow dags unpause trading_workflow > /dev/null 2>&1
+run_test_docker_compose exec test-airflow-webserver airflow dags unpause trading_workflow > /dev/null 2>&1
 echo "✅ trading_workflow DAG unpaused"
 
 echo ""
@@ -339,7 +352,7 @@ execution_date=$(date -u '+%Y-%m-%dT%H:%M:%S')
 echo "📅 Using execution_date: $execution_date"
 
 # Trigger the consolidated DAG
-docker compose exec airflow-webserver airflow dags trigger trading_workflow -e "$execution_date" > /dev/null 2>&1
+run_test_docker_compose exec test-airflow-webserver airflow dags trigger trading_workflow -e "$execution_date" > /dev/null 2>&1
 echo "✅ trading_workflow DAG triggered"
 
 echo ""
@@ -364,7 +377,7 @@ echo "===================================="
 
 # Check execution status
 echo "🕐 Checking trading_workflow execution..."
-workflow_runs=$(docker compose exec airflow-webserver \
+workflow_runs=$(run_test_docker_compose exec test-airflow-webserver \
     airflow dags list-runs -d trading_workflow 2>/dev/null \
     | grep -E "(success|running|failed)" | tr -d '\r' || echo "")
 
