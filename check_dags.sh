@@ -13,9 +13,9 @@
 # Mounts ./src/dags → /opt/airflow/dags
 #
 # Usage:
-#   ./check_dags.sh                    # Default: Test consolidated DAG workflow
-#   ./check_dags.sh --timeout=N        # Set custom timeout
-#   ./check_dags.sh --real-data        # Enable real API data collection
+#   AIRFLOW_PORT=8081 POSTGRES_DB=airflow_test ./check_dags.sh # Default: Test consolidated DAG workflow
+#   AIRFLOW_PORT=8081 POSTGRES_DB=airflow_test ./check_dags.sh --timeout=N        # Set custom timeout
+#   AIRFLOW_PORT=8081 POSTGRES_DB=airflow_test ./check_dags.sh --real-data        # Enable real API data collection
 #
 # Consolidated DAG Mode:
 #   • Single trading_workflow DAG with 3 task groups
@@ -76,16 +76,21 @@ fi
 echo ""
 
 # Test environment configuration (different from production)
-# Use local variables to avoid polluting the shell environment
-TEST_AIRFLOW_PORT=8081
-TEST_POSTGRES_HOST=localhost
-TEST_POSTGRES_DB=airflow_test  
-TEST_POSTGRES_USER=airflow
-TEST_POSTGRES_PASSWORD=airflow
+# Set environment variables properly for test environment
+export AIRFLOW_PORT=${AIRFLOW_PORT:-8081}
+export POSTGRES_HOST=${POSTGRES_HOST:-localhost}
+export POSTGRES_DB=${POSTGRES_DB:-airflow_test}
+export POSTGRES_USER=${POSTGRES_USER:-airflow}
+export POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-airflow}
 
-# Helper function for docker compose commands with test environment
+echo "🔧 Test Environment Configuration:"
+echo "   AIRFLOW_PORT: $AIRFLOW_PORT"
+echo "   POSTGRES_DB: $POSTGRES_DB"
+echo "   POSTGRES_HOST: $POSTGRES_HOST"
+
+# Helper function for docker compose commands with environment variables
 run_test_docker_compose() {
-    AIRFLOW_PORT=$TEST_AIRFLOW_PORT POSTGRES_DB=$TEST_POSTGRES_DB POSTGRES_HOST=$TEST_POSTGRES_HOST POSTGRES_USER=$TEST_POSTGRES_USER POSTGRES_PASSWORD=$TEST_POSTGRES_PASSWORD docker compose -f docker-compose.test.yml "$@"
+    docker compose "$@"
 }
 
 # Configure data collection mode
@@ -99,13 +104,13 @@ else
 fi
 
 echo "🔄 Test Environment:"
-echo "  • Port: $TEST_AIRFLOW_PORT (vs production 8080)"
-echo "  • Database: $TEST_POSTGRES_DB (vs production airflow)"
+echo "  • Port: $AIRFLOW_PORT (vs production 8080)"
+echo "  • Database: $POSTGRES_DB (vs production airflow)"
 echo "  • USE_REAL_DATA: $USE_REAL_DATA"
 
 echo "📁 Test DAG Folder: $(pwd)/src/dags"
 echo "📁 Expected: Single trading_dag.py with task groups"
-echo "🐳 Using Docker environment (docker-compose.yml, port 8081)"
+echo "🐳 Using Docker environment (docker-compose.yml, port $AIRFLOW_PORT)"
 echo ""
 
 # Check if source dags folder exists
@@ -258,39 +263,58 @@ echo "✅ Task groups replace separate DAGs"
 echo "✅ No ExternalTaskSensor dependencies needed"
 echo ""
 
-echo "🐳 STARTING DOCKER ENVIRONMENT (PORT 8081)"
+echo "🐳 STARTING DOCKER ENVIRONMENT (PORT $AIRFLOW_PORT)"
 echo "=========================================="
 
 echo "🛑 Stopping any running services..."
 run_test_docker_compose down 2>/dev/null || true
 
 echo "🚀 Starting Airflow test environment..."
-echo "   Port: $TEST_AIRFLOW_PORT, Database: $TEST_POSTGRES_DB, USE_REAL_DATA: $USE_REAL_DATA"
+echo "   Port: $AIRFLOW_PORT, Database: $POSTGRES_DB, USE_REAL_DATA: $USE_REAL_DATA"
 run_test_docker_compose up -d
 
-echo "⏳ Waiting for Airflow to initialize (port 8081)..."
-sleep 60
+echo "⏳ Waiting for Airflow to initialize (port $AIRFLOW_PORT)..."
+
+# Wait for containers to be healthy first
+echo "🔄 Waiting for container health checks..."
+for i in {1..20}; do
+    container_health=$(docker compose ps --format json | jq -r '.[] | select(.Name | contains("airflow-webserver")) | .Health' 2>/dev/null || echo "unknown")
+    if [[ "$container_health" == "healthy" ]]; then
+        echo "   ✅ Container is healthy after ${i}0 seconds"
+        break
+    fi
+    echo "   Waiting for container health... (${i}/20, status: $container_health)"
+    sleep 10
+done
+
+# Additional wait for Airflow internal initialization
+sleep 30
 
 # Wait for Airflow to be ready
-echo "🔄 Checking Airflow health (port 8081)..."
-max_attempts=15
+echo "🔄 Checking Airflow health (port $AIRFLOW_PORT)..."
+max_attempts=20
 attempt=0
 
 while [ $attempt -lt $max_attempts ]; do
-    health_check=$(curl -s http://localhost:8081/health 2>/dev/null || echo "failed")
-    web_access=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8081 2>/dev/null || echo "000")
+    # More comprehensive health check
+    health_check=$(curl -s http://localhost:$AIRFLOW_PORT/health 2>/dev/null || echo "failed")
+    web_access=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:$AIRFLOW_PORT 2>/dev/null || echo "000")
     
-    # Accept both 200 and 302 as valid (302 is redirect to login page)
-    if [[ "$health_check" != "failed" ]] && ([[ "$web_access" == "200" ]] || [[ "$web_access" == "302" ]]); then
-        echo "✅ Airflow is ready!"
-        echo "   Health endpoint: ✅ http://localhost:8081/health"
-        echo "   Web interface: ✅ http://localhost:8081 (HTTP $web_access)"
-        break
+    # Check if health endpoint returns proper JSON
+    if [[ "$health_check" != "failed" ]] && [[ "$health_check" =~ "metadatabase" ]]; then
+        # Also verify web access
+        if [[ "$web_access" == "200" ]] || [[ "$web_access" == "302" ]]; then
+            echo "✅ Airflow is ready!"
+            echo "   Health endpoint: ✅ http://localhost:$AIRFLOW_PORT/health"
+            echo "   Web interface: ✅ http://localhost:$AIRFLOW_PORT (HTTP $web_access)"
+            echo "   Metadatabase: $(echo "$health_check" | grep -o '"metadatabase":{"status":"[^"]*"' | cut -d'"' -f6)"
+            break
+        fi
     fi
     
     attempt=$((attempt + 1))
-    echo "   Attempt $attempt/$max_attempts (Health: $health_check, Web: HTTP $web_access)..."
-    sleep 15
+    echo "   Attempt $attempt/$max_attempts (Health: $(echo "$health_check" | cut -c1-20)..., Web: HTTP $web_access)..."
+    sleep 10
 done
 
 if [ $attempt -eq $max_attempts ]; then
@@ -304,7 +328,7 @@ echo "======================================="
 
 # Check for DAG import errors - EARLY STOP if any found
 echo "🧪 Checking for DAG import errors..."
-import_errors=$(run_test_docker_compose exec test-airflow-webserver airflow dags list-import-errors 2>/dev/null)
+import_errors=$(run_test_docker_compose exec airflow-webserver airflow dags list-import-errors 2>/dev/null)
 
 if [[ "$import_errors" == *"No data found"* ]]; then
     echo "✅ SUCCESS: No DAG import errors found!"
@@ -324,11 +348,11 @@ fi
 # Verify consolidated DAG is loaded
 echo ""
 echo "📋 Verifying consolidated DAG..."
-loaded_dags=$(run_test_docker_compose exec test-airflow-webserver airflow dags list 2>/dev/null | grep "trading_workflow" | wc -l)
+loaded_dags=$(run_test_docker_compose exec airflow-webserver airflow dags list 2>/dev/null | grep "trading_workflow" | wc -l)
 
 if [ "$loaded_dags" -eq 1 ]; then
     echo "✅ SUCCESS: Consolidated trading_workflow DAG is loaded"
-    dag_details=$(run_test_docker_compose exec test-airflow-webserver airflow dags list 2>/dev/null | grep "trading_workflow")
+    dag_details=$(run_test_docker_compose exec airflow-webserver airflow dags list 2>/dev/null | grep "trading_workflow")
     echo "Loaded DAG:"
     echo "$dag_details"
 else
@@ -343,7 +367,7 @@ echo "=================================="
 
 # Unpause the consolidated DAG
 echo "📋 Unpausing trading_workflow DAG..."
-run_test_docker_compose exec test-airflow-webserver airflow dags unpause trading_workflow > /dev/null 2>&1
+run_test_docker_compose exec airflow-webserver airflow dags unpause trading_workflow > /dev/null 2>&1
 echo "✅ trading_workflow DAG unpaused"
 
 echo ""
@@ -352,7 +376,7 @@ execution_date=$(date -u '+%Y-%m-%dT%H:%M:%S')
 echo "📅 Using execution_date: $execution_date"
 
 # Trigger the consolidated DAG
-run_test_docker_compose exec test-airflow-webserver airflow dags trigger trading_workflow -e "$execution_date" > /dev/null 2>&1
+run_test_docker_compose exec airflow-webserver airflow dags trigger trading_workflow -e "$execution_date" > /dev/null 2>&1
 echo "✅ trading_workflow DAG triggered"
 
 echo ""
@@ -377,7 +401,7 @@ echo "===================================="
 
 # Check execution status
 echo "🕐 Checking trading_workflow execution..."
-workflow_runs=$(run_test_docker_compose exec test-airflow-webserver \
+workflow_runs=$(run_test_docker_compose exec airflow-webserver \
     airflow dags list-runs -d trading_workflow 2>/dev/null \
     | grep -E "(success|running|failed)" | tr -d '\r' || echo "")
 
@@ -471,7 +495,7 @@ else
 fi
 
 echo ""
-echo "🔗 Access Airflow UI: http://localhost:8081"
+echo "🔗 Access Airflow UI: http://localhost:$AIRFLOW_PORT"
 echo "   Username: admin / Password: admin"
 echo ""
 

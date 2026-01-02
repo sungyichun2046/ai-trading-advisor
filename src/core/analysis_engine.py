@@ -358,454 +358,315 @@ class TechnicalAnalyzer:
 
 
 class PatternAnalyzer:
-    """Enhanced pattern recognition with support/resistance and breakout detection."""
+    """Advanced chart and technical pattern recognition for trading signals."""
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
-        
-    def detect_chart_patterns(self, data: pd.DataFrame) -> Dict[str, Any]:
-        """Detect advanced chart patterns."""
-        if data.empty or len(data) < 20:
-            return {"patterns": [], "count": 0, "breakout_signals": []}
-        
+        self.pattern_confidence_threshold = self.config.get('pattern_confidence_threshold', 0.7)
+    
+    def detect_chart_patterns(self, data: pd.DataFrame, timeframe: str = '1h') -> Dict[str, Any]:
+        """Detect major chart patterns (triangles, head & shoulders, flags, etc.)."""
         try:
-            patterns = []
+            if data.empty or len(data) < 20:
+                return {
+                    'timeframe': timeframe,
+                    'patterns': [], 
+                    'signals': [], 
+                    'dominant_signal': 'neutral',
+                    'confidence': 0.0, 
+                    'pattern_count': 0,
+                    'signal_strength': 'weak'
+                }
             
-            if all(col in data.columns for col in ['High', 'Low', 'Close']):
-                support_resistance = self.detect_support_resistance(data)
-                triangle_pattern = self.detect_triangle_patterns(data)
-                if triangle_pattern:
-                    patterns.append(triangle_pattern)
-                
-                # Use new helper methods to detect additional patterns
-                head_shoulders = self._detect_head_shoulders(data)
-                if head_shoulders:
-                    patterns.append(head_shoulders)
-                
-                advanced_triangles = self._detect_advanced_triangles(data)
-                patterns.extend(advanced_triangles)
-                
-                flag_pattern = self._detect_flags(data)
-                if flag_pattern:
-                    patterns.append(flag_pattern)
-                
-                breakouts = [{"type": "simple", "direction": "neutral"}]  # Simplified
+            patterns_detected = []
+            signals = []
+            
+            # Analyze price structure for patterns
+            highs = data['High'].values
+            lows = data['Low'].values
+            closes = data['Close'].values
+            
+            # Triangle patterns
+            triangle_result = self._detect_triangle_patterns(data)
+            if triangle_result['detected']:
+                patterns_detected.append(triangle_result)
+                signals.append(triangle_result['signal'])
+            
+            # Head and shoulders patterns
+            hs_result = self._detect_head_shoulders(data)
+            if hs_result['detected']:
+                patterns_detected.append(hs_result)
+                signals.append(hs_result['signal'])
+            
+            # Flag and pennant patterns
+            flag_result = self._detect_flag_patterns(data)
+            if flag_result['detected']:
+                patterns_detected.append(flag_result)
+                signals.append(flag_result['signal'])
+            
+            # Double top/bottom patterns
+            double_result = self._detect_double_patterns(data)
+            if double_result['detected']:
+                patterns_detected.append(double_result)
+                signals.append(double_result['signal'])
+            
+            # Calculate overall confidence
+            if patterns_detected:
+                confidences = [p.get('confidence', 0) for p in patterns_detected]
+                overall_confidence = sum(confidences) / len(confidences)
             else:
-                support_resistance = {}
-                breakouts = []
+                overall_confidence = 0.0
+            
+            # Determine dominant signal
+            bullish_signals = sum(1 for s in signals if s == 'bullish')
+            bearish_signals = sum(1 for s in signals if s == 'bearish')
+            
+            if bullish_signals > bearish_signals:
+                dominant_signal = 'bullish'
+            elif bearish_signals > bullish_signals:
+                dominant_signal = 'bearish'
+            else:
+                dominant_signal = 'neutral'
             
             return {
-                "patterns": patterns, 
-                "count": len(patterns),
-                "breakout_signals": breakouts,
-                "support_resistance": support_resistance
+                'timeframe': timeframe,
+                'patterns': patterns_detected,
+                'signals': signals,
+                'dominant_signal': dominant_signal,
+                'confidence': round(overall_confidence, 3),
+                'pattern_count': len(patterns_detected),
+                'signal_strength': 'strong' if overall_confidence > 0.8 else 'moderate' if overall_confidence > 0.5 else 'weak'
             }
             
-        except Exception:
-            return {"patterns": [], "count": 0, "breakout_signals": []}
+        except Exception as e:
+            logger.error(f"Chart pattern detection failed: {e}")
+            return {
+                'timeframe': timeframe,
+                'patterns': [], 
+                'signals': [], 
+                'dominant_signal': 'neutral',
+                'confidence': 0.0, 
+                'pattern_count': 0,
+                'signal_strength': 'weak'
+            }
     
-    def detect_triangle_patterns(self, data: pd.DataFrame) -> Optional[Dict[str, Any]]:
-        """Detect triangle patterns (simplified)."""
+    def _detect_triangle_patterns(self, data: pd.DataFrame) -> Dict[str, Any]:
+        """Detect ascending, descending, and symmetrical triangles."""
         try:
             if len(data) < 10:
-                return None
+                return {'detected': False}
             
-            recent_highs = data['High'].tail(10)
-            recent_lows = data['Low'].tail(10)
+            highs = data['High'].values
+            lows = data['Low'].values
             
-            # Simple pattern detection
-            if recent_lows.is_monotonic_increasing and recent_highs.std() < recent_highs.mean() * 0.02:
-                return {"pattern_type": "ascending_triangle", "confidence": 0.7, "direction": "bullish"}
-            elif recent_highs.is_monotonic_decreasing and recent_lows.std() < recent_lows.mean() * 0.02:
-                return {"pattern_type": "descending_triangle", "confidence": 0.7, "direction": "bearish"}
+            # Simplified triangle detection using trend lines
+            recent_highs = highs[-10:]
+            recent_lows = lows[-10:]
             
-            return None
+            # Check for converging trend lines (basic implementation)
+            high_trend = np.polyfit(range(len(recent_highs)), recent_highs, 1)[0]
+            low_trend = np.polyfit(range(len(recent_lows)), recent_lows, 1)[0]
+            
+            # Triangle pattern criteria
+            if abs(high_trend) < 0.01 and low_trend > 0.01:  # Ascending triangle
+                return {
+                    'detected': True,
+                    'pattern': 'ascending_triangle',
+                    'signal': 'bullish',
+                    'confidence': 0.75,
+                    'breakout_target': data['High'].iloc[-1] * 1.05
+                }
+            elif high_trend < -0.01 and abs(low_trend) < 0.01:  # Descending triangle
+                return {
+                    'detected': True,
+                    'pattern': 'descending_triangle',
+                    'signal': 'bearish',
+                    'confidence': 0.75,
+                    'breakout_target': data['Low'].iloc[-1] * 0.95
+                }
+            elif high_trend < -0.005 and low_trend > 0.005:  # Symmetrical triangle
+                return {
+                    'detected': True,
+                    'pattern': 'symmetrical_triangle',
+                    'signal': 'neutral',
+                    'confidence': 0.65,
+                    'breakout_direction': 'pending'
+                }
+            
+            return {'detected': False}
             
         except Exception:
-            return None
+            return {'detected': False}
     
-    def detect_support_resistance(self, data: pd.DataFrame, window: int = 5) -> Dict[str, Any]:
-        """Enhanced support and resistance detection with pivot clustering, Fibonacci, and volume validation."""
-        if data.empty or len(data) < window * 4:
-            return {"support_levels": [], "resistance_levels": []}
-        
+    def _detect_head_shoulders(self, data: pd.DataFrame) -> Dict[str, Any]:
+        """Detect head and shoulders reversal patterns."""
         try:
-            # Import shared utilities
-            from ..utils.shared import find_pivot_highs_lows, calculate_pattern_confidence, calculate_volume_indicators
+            if len(data) < 15:
+                return {'detected': False}
             
-            # Standardize column names
-            highs = data['high'] if 'high' in data.columns else data['High'] if 'High' in data.columns else data['close']
-            lows = data['low'] if 'low' in data.columns else data['Low'] if 'Low' in data.columns else data['close']
-            closes = data['close'] if 'close' in data.columns else data['Close']
-            volumes = data['volume'] if 'volume' in data.columns else None
+            highs = data['High'].values
+            lows = data['Low'].values
             
-            # Create standardized DataFrame for utilities
-            df = pd.DataFrame({'high': highs, 'low': lows, 'close': closes})
-            if volumes is not None:
-                df['volume'] = volumes
+            # Look for three peaks pattern (simplified)
+            recent_data = data.tail(15)
+            high_points = []
             
-            # Find pivot points
-            pivots = find_pivot_highs_lows(df, window)
-            pivot_highs = [highs.iloc[i] for i in pivots['pivot_highs'] if i < len(highs)]
-            pivot_lows = [lows.iloc[i] for i in pivots['pivot_lows'] if i < len(lows)]
+            # Find local maxima
+            for i in range(1, len(recent_data)-1):
+                if (recent_data.iloc[i]['High'] > recent_data.iloc[i-1]['High'] and 
+                    recent_data.iloc[i]['High'] > recent_data.iloc[i+1]['High']):
+                    high_points.append((i, recent_data.iloc[i]['High']))
             
-            # Calculate Fibonacci retracements from recent swing
-            current_high = highs.max()
-            current_low = lows.min()
-            fib_range = current_high - current_low
-            fib_levels = [
-                current_low + fib_range * 0.236,  # 23.6%
-                current_low + fib_range * 0.382,  # 38.2%
-                current_low + fib_range * 0.618,  # 61.8%
-                current_low + fib_range * 0.786   # 78.6%
-            ]
-            
-            # Identify psychological levels (round numbers)
-            price_range = (current_high + current_low) / 2
-            if price_range > 100:
-                step = 10  # $10 increments for higher prices
-            elif price_range > 50:
-                step = 5   # $5 increments for mid prices
-            else:
-                step = 1   # $1 increments for lower prices
-            
-            psych_levels = []
-            for level in range(int(current_low // step) * step, int(current_high // step + 1) * step + 1, step):
-                if current_low <= level <= current_high:
-                    psych_levels.append(float(level))
-            
-            # Cluster nearby levels
-            all_levels = pivot_highs + pivot_lows + fib_levels + psych_levels
-            clustered_levels = self._cluster_levels(all_levels, tolerance=price_range * 0.005)
-            
-            # Volume validation
-            volume_indicators = calculate_volume_indicators(df) if volumes is not None else {}
-            
-            # Separate into support and resistance with strength scoring
-            resistance_levels = []
-            support_levels = []
-            
-            current_price = closes.iloc[-1]
-            for level in clustered_levels:
-                level_data = {'price': level, 'level_type': 'unknown', 'strength_score': 0.5}
+            # Check for head and shoulders pattern
+            if len(high_points) >= 3:
+                # Sort by height to identify head (highest) and shoulders
+                sorted_points = sorted(high_points, key=lambda x: x[1], reverse=True)
+                head = sorted_points[0]
+                potential_shoulders = sorted_points[1:3]
                 
-                # Determine level type and strength
-                if level > current_price:
-                    level_data['level_type'] = 'resistance'
-                    # Check how many times price approached but didn't break this level
-                    touches = sum(1 for h in highs if abs(h - level) <= price_range * 0.002)
-                    level_data['strength_score'] = min(1.0, 0.3 + touches * 0.1)
+                # Basic head and shoulders criteria
+                if (abs(potential_shoulders[0][1] - potential_shoulders[1][1]) < head[1] * 0.02 and
+                    head[1] > potential_shoulders[0][1] * 1.03):
                     
-                    # Add Fibonacci bonus
-                    if any(abs(level - fib) <= price_range * 0.001 for fib in fib_levels):
-                        level_data['strength_score'] = min(1.0, level_data['strength_score'] + 0.15)
-                        level_data['level_type'] = 'fibonacci_resistance'
-                    
-                    # Add psychological level bonus
-                    if level in psych_levels:
-                        level_data['strength_score'] = min(1.0, level_data['strength_score'] + 0.1)
-                        level_data['level_type'] = 'psychological_resistance'
-                    
-                    # Volume confirmation
-                    if volume_indicators and level_data['strength_score'] > 0.6:
-                        level_data['volume_confirmed'] = True
-                        level_data['strength_score'] = min(1.0, level_data['strength_score'] + 0.05)
-                    
-                    resistance_levels.append(level_data)
-                    
-                elif level < current_price:
-                    level_data['level_type'] = 'support'
-                    touches = sum(1 for l in lows if abs(l - level) <= price_range * 0.002)
-                    level_data['strength_score'] = min(1.0, 0.3 + touches * 0.1)
-                    
-                    if any(abs(level - fib) <= price_range * 0.001 for fib in fib_levels):
-                        level_data['strength_score'] = min(1.0, level_data['strength_score'] + 0.15)
-                        level_data['level_type'] = 'fibonacci_support'
-                    
-                    if level in psych_levels:
-                        level_data['strength_score'] = min(1.0, level_data['strength_score'] + 0.1)
-                        level_data['level_type'] = 'psychological_support'
-                    
-                    if volume_indicators and level_data['strength_score'] > 0.6:
-                        level_data['volume_confirmed'] = True
-                        level_data['strength_score'] = min(1.0, level_data['strength_score'] + 0.05)
-                    
-                    support_levels.append(level_data)
+                    return {
+                        'detected': True,
+                        'pattern': 'head_and_shoulders',
+                        'signal': 'bearish',
+                        'confidence': 0.8,
+                        'neckline': min(potential_shoulders[0][1], potential_shoulders[1][1]),
+                        'target': min(potential_shoulders[0][1], potential_shoulders[1][1]) * 0.95
+                    }
             
-            # Sort by strength and keep top levels
-            resistance_levels = sorted(resistance_levels, key=lambda x: x['strength_score'], reverse=True)[:5]
-            support_levels = sorted(support_levels, key=lambda x: x['strength_score'], reverse=True)[:5]
+            return {'detected': False}
+            
+        except Exception:
+            return {'detected': False}
+    
+    def _detect_flag_patterns(self, data: pd.DataFrame) -> Dict[str, Any]:
+        """Detect flag and pennant continuation patterns."""
+        try:
+            if len(data) < 10:
+                return {'detected': False}
+            
+            # Look for strong directional move followed by consolidation
+            recent_data = data.tail(10)
+            price_change = (recent_data.iloc[-1]['Close'] - recent_data.iloc[0]['Close']) / recent_data.iloc[0]['Close']
+            
+            # Check for consolidation after strong move
+            consolidation_range = recent_data['High'].max() - recent_data['Low'].min()
+            avg_price = recent_data['Close'].mean()
+            consolidation_percent = consolidation_range / avg_price
+            
+            if abs(price_change) > 0.03 and consolidation_percent < 0.02:  # Strong move + tight range
+                signal = 'bullish' if price_change > 0 else 'bearish'
+                pattern_type = 'bull_flag' if signal == 'bullish' else 'bear_flag'
+                
+                return {
+                    'detected': True,
+                    'pattern': pattern_type,
+                    'signal': signal,
+                    'confidence': 0.7,
+                    'consolidation_range': consolidation_percent,
+                    'prior_move': price_change
+                }
+            
+            return {'detected': False}
+            
+        except Exception:
+            return {'detected': False}
+    
+    def _detect_double_patterns(self, data: pd.DataFrame) -> Dict[str, Any]:
+        """Detect double top and double bottom patterns."""
+        try:
+            if len(data) < 20:
+                return {'detected': False}
+            
+            highs = data['High'].values
+            lows = data['Low'].values
+            
+            # Find peaks and troughs
+            peaks = []
+            troughs = []
+            
+            for i in range(1, len(data)-1):
+                if highs[i] > highs[i-1] and highs[i] > highs[i+1]:
+                    peaks.append((i, highs[i]))
+                if lows[i] < lows[i-1] and lows[i] < lows[i+1]:
+                    troughs.append((i, lows[i]))
+            
+            # Check for double top
+            if len(peaks) >= 2:
+                last_two_peaks = peaks[-2:]
+                if abs(last_two_peaks[0][1] - last_two_peaks[1][1]) < last_two_peaks[0][1] * 0.02:
+                    return {
+                        'detected': True,
+                        'pattern': 'double_top',
+                        'signal': 'bearish',
+                        'confidence': 0.75,
+                        'resistance_level': max(last_two_peaks[0][1], last_two_peaks[1][1])
+                    }
+            
+            # Check for double bottom
+            if len(troughs) >= 2:
+                last_two_troughs = troughs[-2:]
+                if abs(last_two_troughs[0][1] - last_two_troughs[1][1]) < last_two_troughs[0][1] * 0.02:
+                    return {
+                        'detected': True,
+                        'pattern': 'double_bottom',
+                        'signal': 'bullish',
+                        'confidence': 0.75,
+                        'support_level': min(last_two_troughs[0][1], last_two_troughs[1][1])
+                    }
+            
+            return {'detected': False}
+            
+        except Exception:
+            return {'detected': False}
+    
+    def validate_pattern_reliability(self, pattern_data: Dict[str, Any], volume_data: pd.Series = None) -> Dict[str, Any]:
+        """Validate pattern reliability using volume confirmation and other factors."""
+        try:
+            if not pattern_data.get('detected', False):
+                return {'reliable': False, 'confidence_adjustment': 0.0}
+            
+            base_confidence = pattern_data.get('confidence', 0.5)
+            adjustments = []
+            
+            # Volume confirmation (if available)
+            if volume_data is not None and len(volume_data) > 5:
+                recent_volume = volume_data.tail(5).mean()
+                avg_volume = volume_data.mean()
+                volume_ratio = recent_volume / avg_volume if avg_volume > 0 else 1.0
+                
+                if volume_ratio > 1.2:  # Above average volume supports pattern
+                    adjustments.append(0.1)
+                elif volume_ratio < 0.8:  # Below average volume weakens pattern
+                    adjustments.append(-0.1)
+            
+            # Pattern-specific reliability factors
+            pattern_type = pattern_data.get('pattern', '')
+            if 'triangle' in pattern_type:
+                # Triangles are more reliable near the apex
+                adjustments.append(0.05)
+            elif 'double' in pattern_type:
+                # Double patterns need strong volume confirmation
+                adjustments.append(-0.05 if not volume_data else 0.05)
+            
+            # Calculate adjusted confidence
+            total_adjustment = sum(adjustments)
+            adjusted_confidence = max(0.0, min(1.0, base_confidence + total_adjustment))
+            reliable = adjusted_confidence >= self.pattern_confidence_threshold
             
             return {
-                "support_levels": support_levels,
-                "resistance_levels": resistance_levels,
-                "fibonacci_levels": fib_levels,
-                "psychological_levels": psych_levels,
-                "pivot_analysis": {"pivot_highs": len(pivots['pivot_highs']), "pivot_lows": len(pivots['pivot_lows'])}
+                'reliable': reliable,
+                'adjusted_confidence': round(adjusted_confidence, 3),
+                'confidence_adjustment': round(total_adjustment, 3),
+                'reliability_factors': adjustments
             }
             
         except Exception as e:
-            logger.warning(f"Enhanced support/resistance detection failed: {e}, using fallback")
-            return {"support_levels": [], "resistance_levels": []}
-    
-    def _cluster_levels(self, levels: list, tolerance: float) -> list:
-        """Cluster nearby price levels to avoid duplicates."""
-        if not levels:
-            return []
-        
-        levels = sorted(set(levels))
-        clustered = []
-        current_cluster = [levels[0]]
-        
-        for level in levels[1:]:
-            if level - current_cluster[-1] <= tolerance:
-                current_cluster.append(level)
-            else:
-                # Use average of cluster
-                clustered.append(sum(current_cluster) / len(current_cluster))
-                current_cluster = [level]
-        
-        # Add final cluster
-        if current_cluster:
-            clustered.append(sum(current_cluster) / len(current_cluster))
-        
-        return clustered
-    
-    def _detect_head_shoulders(self, data: pd.DataFrame) -> Optional[Dict[str, Any]]:
-        """Detect head and shoulders pattern using pivot analysis."""
-        try:
-            # Import shared utilities
-            try:
-                from ..utils.shared import find_pivot_highs_lows, calculate_pattern_confidence
-            except ImportError:
-                def find_pivot_highs_lows(df, window=5):
-                    # Return safe indices based on actual data length
-                    max_idx = len(df) - 1 if not df.empty else 0
-                    return {
-                        'pivot_highs': [min(i, max_idx) for i in [max_idx//4, max_idx//2, max_idx*3//4] if i < max_idx],
-                        'pivot_lows': [min(i, max_idx) for i in [max_idx//6, max_idx//3, max_idx*2//3] if i < max_idx]
-                    }
-                def calculate_pattern_confidence(pattern):
-                    return 0.75
-            
-            if len(data) < 15:
-                return None
-            
-            # Find pivot points
-            pivot_data = find_pivot_highs_lows(data, window=3)
-            pivot_highs = pivot_data['pivot_highs']
-            
-            if len(pivot_highs) < 3:
-                return None
-            
-            # Check for head and shoulders pattern in recent pivots
-            recent_highs = pivot_highs[-3:] if len(pivot_highs) >= 3 else pivot_highs
-            if len(recent_highs) != 3:
-                return None
-            
-            left_shoulder, head, right_shoulder = recent_highs
-            
-            # Ensure indices are within bounds
-            if left_shoulder >= len(data) or head >= len(data) or right_shoulder >= len(data):
-                return None
-            
-            left_val = data.iloc[left_shoulder]['High'] if 'High' in data.columns else data.iloc[left_shoulder]['Close']
-            head_val = data.iloc[head]['High'] if 'High' in data.columns else data.iloc[head]['Close']
-            right_val = data.iloc[right_shoulder]['High'] if 'High' in data.columns else data.iloc[right_shoulder]['Close']
-            
-            # Head should be higher than both shoulders
-            if head_val > left_val and head_val > right_val:
-                # Shoulders should be roughly equal (within 3%)
-                shoulder_ratio = abs(left_val - right_val) / max(left_val, right_val)
-                if shoulder_ratio < 0.03:
-                    pattern = {
-                        'strength': 0.8,
-                        'volume_confirmed': True,
-                        'duration_bars': right_shoulder - left_shoulder
-                    }
-                    confidence = calculate_pattern_confidence(pattern)
-                    
-                    return {
-                        'pattern_type': 'head_and_shoulders',
-                        'confidence': confidence,
-                        'direction': 'bearish',
-                        'left_shoulder': left_shoulder,
-                        'head': head,
-                        'right_shoulder': right_shoulder,
-                        'neckline': min(left_val, right_val)
-                    }
-            
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error detecting head and shoulders: {e}")
-            return None
-    
-    def _detect_advanced_triangles(self, data: pd.DataFrame) -> List[Dict[str, Any]]:
-        """Detect advanced triangle patterns using pivot analysis."""
-        try:
-            # Import shared utilities
-            try:
-                from ..utils.shared import find_pivot_highs_lows, calculate_pattern_confidence
-            except ImportError:
-                def find_pivot_highs_lows(df, window=5):
-                    # Return safe indices based on actual data length
-                    max_idx = len(df) - 1 if not df.empty else 0
-                    return {
-                        'pivot_highs': [min(i, max_idx) for i in [max_idx//4, max_idx//2, max_idx*3//4] if i < max_idx],
-                        'pivot_lows': [min(i, max_idx) for i in [max_idx//6, max_idx//3, max_idx*2//3] if i < max_idx]
-                    }
-                def calculate_pattern_confidence(pattern):
-                    return 0.75
-            
-            if len(data) < 20:
-                return []
-            
-            # Find pivot points
-            pivot_data = find_pivot_highs_lows(data, window=4)
-            pivot_highs = pivot_data['pivot_highs']
-            pivot_lows = pivot_data['pivot_lows']
-            
-            patterns = []
-            
-            # Symmetrical Triangle
-            if len(pivot_highs) >= 2 and len(pivot_lows) >= 2:
-                recent_highs = pivot_highs[-2:]
-                recent_lows = pivot_lows[-2:]
-                
-                # Ensure all indices are within bounds
-                if any(i >= len(data) for i in recent_highs + recent_lows):
-                    return patterns
-                
-                high_vals = [data.iloc[i]['High'] if 'High' in data.columns else data.iloc[i]['Close'] for i in recent_highs]
-                low_vals = [data.iloc[i]['Low'] if 'Low' in data.columns else data.iloc[i]['Close'] for i in recent_lows]
-                
-                # Converging trend lines
-                if len(high_vals) == 2 and len(low_vals) == 2:
-                    high_slope = (high_vals[1] - high_vals[0]) / (recent_highs[1] - recent_highs[0])
-                    low_slope = (low_vals[1] - low_vals[0]) / (recent_lows[1] - recent_lows[0])
-                    
-                    # Highs declining, lows rising = symmetrical triangle
-                    if high_slope < 0 and low_slope > 0:
-                        pattern = {
-                            'strength': 0.75,
-                            'volume_confirmed': False,
-                            'duration_bars': max(recent_highs[-1], recent_lows[-1]) - min(recent_highs[0], recent_lows[0])
-                        }
-                        confidence = calculate_pattern_confidence(pattern)
-                        
-                        patterns.append({
-                            'pattern_type': 'symmetrical_triangle',
-                            'confidence': confidence,
-                            'direction': 'neutral',
-                            'high_points': recent_highs,
-                            'low_points': recent_lows
-                        })
-            
-            # Wedge patterns
-            if len(pivot_highs) >= 3 and len(pivot_lows) >= 3:
-                recent_high_pivots = pivot_highs[-3:]
-                recent_low_pivots = pivot_lows[-3:]
-                
-                # Ensure all indices are within bounds
-                if any(i >= len(data) for i in recent_high_pivots + recent_low_pivots):
-                    return patterns
-                
-                high_vals = [data.iloc[i]['High'] if 'High' in data.columns else data.iloc[i]['Close'] for i in recent_high_pivots]
-                low_vals = [data.iloc[i]['Low'] if 'Low' in data.columns else data.iloc[i]['Close'] for i in recent_low_pivots]
-                
-                # Rising wedge: both trend lines rising but converging
-                if len(high_vals) >= 2 and len(low_vals) >= 2:
-                    if all(high_vals[i] > high_vals[i-1] for i in range(1, len(high_vals))) and \
-                       all(low_vals[i] > low_vals[i-1] for i in range(1, len(low_vals))):
-                        pattern = {
-                            'strength': 0.7,
-                            'volume_confirmed': False,
-                            'duration_bars': 15
-                        }
-                        confidence = calculate_pattern_confidence(pattern)
-                        
-                        patterns.append({
-                            'pattern_type': 'rising_wedge',
-                            'confidence': confidence,
-                            'direction': 'bearish'
-                        })
-            
-            return patterns
-            
-        except Exception as e:
-            logger.error(f"Error detecting advanced triangles: {e}")
-            return []
-    
-    def _detect_flags(self, data: pd.DataFrame) -> Optional[Dict[str, Any]]:
-        """Detect flag patterns using pivot analysis."""
-        try:
-            # Import shared utilities
-            try:
-                from ..utils.shared import find_pivot_highs_lows, calculate_pattern_confidence
-            except ImportError:
-                def find_pivot_highs_lows(df, window=5):
-                    # Return safe indices based on actual data length
-                    max_idx = len(df) - 1 if not df.empty else 0
-                    return {
-                        'pivot_highs': [min(i, max_idx) for i in [max_idx//4, max_idx//2, max_idx*3//4] if i < max_idx],
-                        'pivot_lows': [min(i, max_idx) for i in [max_idx//6, max_idx//3, max_idx*2//3] if i < max_idx]
-                    }
-                def calculate_pattern_confidence(pattern):
-                    return 0.75
-            
-            if len(data) < 15:
-                return None
-            
-            # Look for strong price movement followed by consolidation
-            closes = data['Close'] if 'Close' in data.columns else data.iloc[:, 0]
-            
-            # Check for flagpole (strong movement)
-            flagpole_start = len(data) - 15
-            flagpole_end = len(data) - 8
-            
-            if flagpole_start < 0:
-                return None
-            
-            flagpole_move = (closes.iloc[flagpole_end] - closes.iloc[flagpole_start]) / closes.iloc[flagpole_start]
-            
-            # Require significant move (>3%) for flagpole
-            if abs(flagpole_move) < 0.03:
-                return None
-            
-            # Check for consolidation (flag)
-            flag_data = data.iloc[flagpole_end:]
-            if len(flag_data) < 5:
-                return None
-            
-            flag_highs = flag_data['High'] if 'High' in flag_data.columns else flag_data['Close']
-            flag_lows = flag_data['Low'] if 'Low' in flag_data.columns else flag_data['Close']
-            
-            flag_range = (flag_highs.max() - flag_lows.min()) / flag_lows.min()
-            
-            # Flag should be relatively narrow (< 2% range)
-            if flag_range < 0.02:
-                direction = 'bullish' if flagpole_move > 0 else 'bearish'
-                pattern = {
-                    'strength': 0.8,
-                    'volume_confirmed': True,
-                    'duration_bars': len(flag_data)
-                }
-                confidence = calculate_pattern_confidence(pattern)
-                
-                return {
-                    'pattern_type': 'flag',
-                    'confidence': confidence,
-                    'direction': direction,
-                    'flagpole_move': flagpole_move,
-                    'flag_range': flag_range
-                }
-            
-            return None
-            
-        except Exception as e:
-            logger.error(f"Error detecting flag patterns: {e}")
-            return None
+            logger.error(f"Pattern validation failed: {e}")
+            return {'reliable': False, 'confidence_adjustment': 0.0}
 
 
 class FundamentalAnalyzer:
@@ -966,7 +827,7 @@ class SentimentAnalyzer:
 
 
 class AnalysisEngine:
-    """Main analysis engine with multi-timeframe, fundamental, and sentiment capabilities."""
+    """Main analysis engine with multi-timeframe, pattern recognition, fundamental, and sentiment capabilities."""
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
@@ -990,13 +851,13 @@ class AnalysisEngine:
             
             timeframe_signals = {}
             
-            # Technical and pattern analysis for each timeframe
+            # Technical and Pattern analysis for each timeframe
             for timeframe, data in data_by_timeframe.items():
                 if data.empty:
                     continue
                 
                 technical_results = self.technical.calculate_indicators(data, timeframe)
-                pattern_results = self.pattern.detect_chart_patterns(data)
+                pattern_results = self.pattern.detect_chart_patterns(data, timeframe)
                 
                 analysis_results["timeframe_analysis"][timeframe] = {
                     "technical": technical_results,
@@ -1007,9 +868,15 @@ class AnalysisEngine:
                 # Extract signals for consensus
                 tech_indicators = technical_results.get('indicators', {})
                 trend_direction = tech_indicators.get('trend', {}).get('direction')
+                pattern_signal = pattern_results.get('dominant_signal', 'neutral')
                 
                 if trend_direction:
                     timeframe_signals[timeframe] = trend_direction.value if hasattr(trend_direction, 'value') else str(trend_direction)
+                
+                # Add pattern signals to timeframe signals
+                if pattern_signal != 'neutral':
+                    pattern_key = f"{timeframe}_pattern"
+                    timeframe_signals[pattern_key] = pattern_signal
             
             # Fundamental analysis
             fundamental_results = self.fundamental.analyze_fundamentals([symbol])

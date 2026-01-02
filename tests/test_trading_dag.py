@@ -86,7 +86,7 @@ class TestConsolidatedTradingDAG:
 
     def test_task_count(self):
         """Test that we have the expected number of tasks."""
-        assert len(dag.tasks) == 13  # 4 data + 5 analysis + 4 trading
+        assert len(dag.tasks) == 14  # 4 data + 6 analysis (including patterns) + 4 trading
 
 
 class TestDataCollectionFunctions:
@@ -347,7 +347,7 @@ class TestTaskGroupIntegration:
         
         # Verify each group has expected number of tasks
         assert len(collect_tasks) == 4  # 3 collection + 1 monitoring
-        assert len(analyze_tasks) == 5  # 3 analysis + 1 consensus + 1 monitoring  
+        assert len(analyze_tasks) == 6  # 4 analysis (including patterns) + 1 consensus + 1 monitoring  
         assert len(trading_tasks) == 4  # 3 trading + 1 monitoring
 
     def test_consolidated_dag_eliminates_sensors(self):

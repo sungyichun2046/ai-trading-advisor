@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # PostgreSQL (Airflow metadata DB)
   # Environment variable configurable for test/production separation

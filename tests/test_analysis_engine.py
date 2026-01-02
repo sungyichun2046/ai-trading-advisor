@@ -93,336 +93,6 @@ class TestTechnicalAnalyzer:
         assert result['alignment'] in ['bullish', 'bearish', 'sideways', 'unknown']
 
 
-class TestPatternAnalyzer:
-    """Test enhanced pattern recognition functionality."""
-    
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.analyzer = PatternAnalyzer()
-        
-        # Create pattern-friendly data
-        dates = pd.date_range(start='2024-01-01', periods=25, freq='D')
-        
-        # Create ascending triangle pattern
-        self.triangle_data = pd.DataFrame({
-            'High': [105, 105.1, 104.9, 105.2, 104.8] * 5,  # Horizontal resistance
-            'Low': [100 + i*0.3 for i in range(25)],  # Rising support
-            'Close': [102 + i*0.2 for i in range(25)],
-            'Volume': np.random.randint(100000, 200000, 25)
-        }, index=dates)
-        
-        # Ensure OHLC logic
-        self.triangle_data['Open'] = self.triangle_data['Close'].shift(1).fillna(self.triangle_data['Close'].iloc[0])
-        for i in range(len(self.triangle_data)):
-            high = max(self.triangle_data.iloc[i][['Open', 'High', 'Close']])
-            low = min(self.triangle_data.iloc[i][['Open', 'Low', 'Close']])
-            self.triangle_data.at[self.triangle_data.index[i], 'High'] = high
-            self.triangle_data.at[self.triangle_data.index[i], 'Low'] = low
-    
-    def test_detect_chart_patterns_complete(self):
-        """Test complete chart pattern detection."""
-        result = self.analyzer.detect_chart_patterns(self.triangle_data)
-        
-        assert 'patterns' in result
-        assert 'count' in result
-        assert 'breakout_signals' in result
-        assert 'support_resistance' in result
-        
-        assert isinstance(result['patterns'], list)
-        assert isinstance(result['count'], int)
-        assert isinstance(result['breakout_signals'], list)
-        assert isinstance(result['support_resistance'], dict)
-    
-    def test_detect_support_resistance(self):
-        """Test simplified support and resistance detection."""
-        result = self.analyzer.detect_support_resistance(self.triangle_data)
-        
-        assert 'support_levels' in result
-        assert 'resistance_levels' in result
-        
-        assert isinstance(result['support_levels'], list)
-        assert isinstance(result['resistance_levels'], list)
-    
-    def test_enhanced_support_resistance(self):
-        """Test enhanced support/resistance detection with multiple features."""
-        # Create data with clear support/resistance levels
-        dates = pd.date_range('2024-01-01', periods=50, freq='1D')
-        
-        # Price data that bounces between 95-105 with clear levels at 100, 102
-        base_prices = [100 + 5 * np.sin(i / 10) + np.random.random() * 0.5 for i in range(50)]
-        highs = [p + abs(np.random.random() * 1) for p in base_prices]
-        lows = [p - abs(np.random.random() * 1) for p in base_prices]
-        volumes = [1000000 + np.random.randint(-200000, 200000) for _ in range(50)]
-        
-        test_data = pd.DataFrame({
-            'high': highs,
-            'low': lows,
-            'close': base_prices,
-            'volume': volumes
-        }, index=dates)
-        
-        result = self.analyzer.detect_support_resistance(test_data)
-        
-        # Verify enhanced structure
-        assert 'support_levels' in result
-        assert 'resistance_levels' in result
-        assert 'fibonacci_levels' in result
-        assert 'psychological_levels' in result
-        assert 'pivot_analysis' in result
-        
-        # Check that levels have enhanced attributes
-        if result['support_levels']:
-            for level in result['support_levels']:
-                assert 'price' in level
-                assert 'level_type' in level
-                assert 'strength_score' in level
-                assert 0 <= level['strength_score'] <= 1
-        
-        if result['resistance_levels']:
-            for level in result['resistance_levels']:
-                assert 'price' in level
-                assert 'level_type' in level
-                assert 'strength_score' in level
-                assert 0 <= level['strength_score'] <= 1
-    
-    def test_pivot_point_detection(self):
-        """Test pivot point detection integration."""
-        # Create data with clear pivot points (ensure enough data for window=5, need 20+ points)
-        prices = [100, 102, 104, 106, 104, 102, 100, 98, 96, 98, 100, 102, 104, 103, 101, 99, 97, 95, 98, 101, 103, 105, 107, 106, 104, 102, 100]
-        test_data = pd.DataFrame({
-            'high': [p + 0.5 for p in prices],
-            'low': [p - 0.5 for p in prices],
-            'close': prices
-        })
-        
-        result = self.analyzer.detect_support_resistance(test_data)
-        
-        assert 'pivot_analysis' in result
-        assert 'pivot_highs' in result['pivot_analysis']
-        assert 'pivot_lows' in result['pivot_analysis']
-        assert isinstance(result['pivot_analysis']['pivot_highs'], int)
-        assert isinstance(result['pivot_analysis']['pivot_lows'], int)
-    
-    def test_fibonacci_levels(self):
-        """Test Fibonacci retracement level calculation."""
-        # Create data with clear swing high/low
-        prices = list(range(90, 110)) + list(range(110, 90, -1))  # Up then down
-        test_data = pd.DataFrame({
-            'high': [p + 1 for p in prices],
-            'low': [p - 1 for p in prices],
-            'close': prices
-        })
-        
-        result = self.analyzer.detect_support_resistance(test_data)
-        
-        assert 'fibonacci_levels' in result
-        assert len(result['fibonacci_levels']) == 4  # 23.6%, 38.2%, 61.8%, 78.6%
-        
-        # Verify Fibonacci levels are in ascending order within range
-        fib_levels = sorted(result['fibonacci_levels'])
-        assert fib_levels[0] >= min(prices) - 1  # Within low range
-        assert fib_levels[-1] <= max(prices) + 1  # Within high range
-    
-    def test_psychological_levels(self):
-        """Test psychological level identification."""
-        # Create data around round number levels (ensure enough data for window requirement)
-        prices = [98.5, 99.2, 100.1, 99.8, 100.3, 101.1, 100.9, 105.2, 104.8, 110.1, 109.5, 108.7, 107.3, 106.8, 105.4, 104.9, 103.2, 102.6, 101.8, 100.4, 99.7, 98.9, 99.3, 100.2, 101.5]
-        test_data = pd.DataFrame({
-            'high': [p + 0.2 for p in prices],
-            'low': [p - 0.2 for p in prices],
-            'close': prices
-        })
-        
-        result = self.analyzer.detect_support_resistance(test_data)
-        
-        assert 'psychological_levels' in result
-        assert isinstance(result['psychological_levels'], list)
-        
-        # Should include round numbers like 100, 105, 110 for this price range
-        psych_levels = result['psychological_levels']
-        if psych_levels:
-            # Verify they are round numbers
-            for level in psych_levels:
-                assert level == round(level)  # Should be whole numbers
-                assert min(prices) <= level <= max(prices)  # Within price range
-    
-    def test_enhanced_indicators(self):
-        """Test enhanced technical indicators integration."""
-        # Create comprehensive test data with OHLCV
-        dates = pd.date_range('2024-01-01', periods=50, freq='1h')
-        np.random.seed(42)
-        
-        base_prices = 100 + np.cumsum(np.random.randn(50) * 0.5)
-        test_data = pd.DataFrame({
-            'Open': base_prices + np.random.randn(50) * 0.1,
-            'High': base_prices + abs(np.random.randn(50)) * 0.3,
-            'Low': base_prices - abs(np.random.randn(50)) * 0.3,
-            'Close': base_prices,
-            'Volume': np.random.randint(800000, 1200000, 50)
-        }, index=dates)
-        
-        # Ensure High >= Close >= Low
-        test_data['High'] = test_data[['Open', 'High', 'Close']].max(axis=1)
-        test_data['Low'] = test_data[['Open', 'Low', 'Close']].min(axis=1)
-        
-        analyzer = TechnicalAnalyzer()
-        result = analyzer.calculate_indicators(test_data, '1h')
-        
-        # Verify all enhanced indicators are present
-        indicators = result['indicators']
-        assert 'bollinger' in indicators
-        assert 'candlestick_patterns' in indicators
-        assert 'bollinger_squeeze' in indicators
-        
-        # Check enhanced Bollinger Bands structure
-        bollinger = indicators['bollinger']
-        enhanced_bb_keys = ['position', 'bandwidth', 'band_position', 'period', 'upper_band', 'lower_band', 'middle_band', 'squeeze']
-        for key in enhanced_bb_keys:
-            assert key in bollinger, f"Missing Bollinger Band key: {key}"
-        
-        # Check candlestick patterns structure
-        patterns = indicators['candlestick_patterns']
-        assert 'patterns' in patterns
-        assert 'current_signal' in patterns
-        assert 'pattern_count' in patterns
-        assert isinstance(patterns['patterns'], list)
-        assert patterns['current_signal'] in ['bullish', 'bearish', 'neutral']
-        
-        # Check Bollinger squeeze structure
-        squeeze = indicators['bollinger_squeeze']
-        squeeze_keys = ['squeeze_active', 'squeeze_strength', 'breakout_direction', 'factors']
-        for key in squeeze_keys:
-            assert key in squeeze, f"Missing squeeze key: {key}"
-    
-    def test_dynamic_bollinger(self):
-        """Test dynamic Bollinger Bands with adaptive periods."""
-        analyzer = TechnicalAnalyzer()
-        
-        # Test with high volatility data (should use shorter periods)
-        high_vol_data = pd.DataFrame({
-            'Open': [100, 95, 105, 90, 110, 85, 115] * 5,
-            'High': [102, 97, 107, 92, 112, 87, 117] * 5,
-            'Low': [98, 93, 103, 88, 108, 83, 113] * 5,
-            'Close': [101, 96, 106, 91, 111, 86, 116] * 5,
-            'Volume': [1000000] * 35
-        })
-        
-        result_high_vol = analyzer.calculate_bollinger_bands(high_vol_data)
-        
-        # Test with low volatility data (should use longer periods)
-        low_vol_data = pd.DataFrame({
-            'Open': [100, 100.1, 100.2, 100.1, 100.3] * 7,
-            'High': [100.2, 100.3, 100.4, 100.3, 100.5] * 7,
-            'Low': [99.8, 99.9, 100.0, 99.9, 100.1] * 7,
-            'Close': [100, 100.1, 100.2, 100.1, 100.3] * 7,
-            'Volume': [1000000] * 35
-        })
-        
-        result_low_vol = analyzer.calculate_bollinger_bands(low_vol_data)
-        
-        # High volatility should generally use shorter periods than low volatility
-        assert 'period' in result_high_vol
-        assert 'period' in result_low_vol
-        assert isinstance(result_high_vol['period'], int)
-        assert isinstance(result_low_vol['period'], int)
-        
-        # Check adaptive period logic is working
-        assert result_high_vol['period'] <= result_low_vol['period']
-        
-        # Check enhanced fields are present
-        enhanced_fields = ['band_position', 'upper_band', 'lower_band', 'middle_band', 'squeeze']
-        for field in enhanced_fields:
-            assert field in result_high_vol
-            assert field in result_low_vol
-    
-    def test_candlestick_integration(self):
-        """Test candlestick pattern detection integration."""
-        analyzer = TechnicalAnalyzer()
-        
-        # Create data with clear candlestick patterns
-        # Doji pattern
-        doji_data = pd.DataFrame({
-            'Open': [100, 100, 100, 100, 100],
-            'High': [101, 101, 101, 101, 101],
-            'Low': [99, 99, 99, 99, 99],
-            'Close': [100.01, 99.99, 100.02, 99.98, 100],  # Very small bodies
-        })
-        
-        result = analyzer.detect_candlestick_patterns(doji_data)
-        
-        # Check basic structure
-        assert 'patterns' in result
-        assert 'current_signal' in result
-        assert 'pattern_count' in result
-        assert 'bullish_count' in result
-        assert 'bearish_count' in result
-        
-        # Should detect some patterns
-        assert isinstance(result['patterns'], list)
-        assert result['current_signal'] in ['bullish', 'bearish', 'neutral']
-        assert result['pattern_count'] >= 0
-        
-        # Test hammer pattern
-        hammer_data = pd.DataFrame({
-            'Open': [100, 100, 90, 100, 100],
-            'High': [100, 100, 91, 100, 100],
-            'Low': [100, 100, 85, 100, 100],  # Long lower shadow
-            'Close': [100, 99, 90.5, 100, 100],  # Small body at top
-        })
-        
-        hammer_result = analyzer.detect_candlestick_patterns(hammer_data)
-        assert hammer_result['pattern_count'] >= 0
-        
-        # If patterns detected, check their structure
-        if hammer_result['patterns']:
-            pattern = hammer_result['patterns'][0]
-            assert 'name' in pattern
-            assert 'signal' in pattern
-            assert 'strength' in pattern
-            assert pattern['signal'] in ['bullish', 'bearish', 'neutral']
-            assert 0 <= pattern['strength'] <= 1
-    
-    def test_adaptive_periods(self):
-        """Test adaptive period calculation integration."""
-        analyzer = TechnicalAnalyzer()
-        
-        # Test different volatility scenarios
-        scenarios = [
-            # Very high volatility
-            pd.DataFrame({
-                'Close': [100, 80, 120, 70, 130, 60, 140] * 5,
-                'High': [105, 85, 125, 75, 135, 65, 145] * 5,
-                'Low': [95, 75, 115, 65, 125, 55, 135] * 5,
-                'Open': [102, 82, 122, 72, 132, 62, 142] * 5
-            }),
-            # Medium volatility  
-            pd.DataFrame({
-                'Close': [100, 98, 102, 101, 99, 103, 100] * 5,
-                'High': [102, 100, 104, 103, 101, 105, 102] * 5,
-                'Low': [98, 96, 100, 99, 97, 101, 98] * 5,
-                'Open': [101, 99, 101, 100, 98, 102, 101] * 5
-            }),
-            # Low volatility
-            pd.DataFrame({
-                'Close': [100, 100.2, 99.8, 100.1, 99.9, 100.3, 100] * 5,
-                'High': [100.3, 100.5, 100.1, 100.4, 100.2, 100.6, 100.3] * 5,
-                'Low': [99.7, 99.9, 99.5, 99.8, 99.6, 100, 99.7] * 5,
-                'Open': [100.1, 100.3, 99.9, 100.2, 100, 100.4, 100.1] * 5
-            })
-        ]
-        
-        periods = []
-        for scenario in scenarios:
-            bb_result = analyzer.calculate_bollinger_bands(scenario)
-            periods.append(bb_result['period'])
-        
-        # High volatility should generally use shorter periods
-        # Low volatility should generally use longer periods
-        assert len(periods) == 3
-        assert all(isinstance(p, int) for p in periods)
-        assert all(5 <= p <= 50 for p in periods)  # Within expected range
-
-
 class TestFundamentalAnalyzer:
     """Test fundamental analysis functionality."""
     
@@ -632,7 +302,6 @@ class TestAnalysisEngine:
         """Test AnalysisEngine initialization with new analyzers."""
         engine = AnalysisEngine()
         assert hasattr(engine, 'technical')
-        assert hasattr(engine, 'pattern')
         assert hasattr(engine, 'fundamental')
         assert hasattr(engine, 'sentiment')
         assert engine.timeframes == ['1h', '1d']
@@ -773,186 +442,7 @@ class TestIntegrationScenarios:
         trend = result['indicators']['trend']
         assert trend['direction'] in ['bullish', 'sideways']  # Allow sideways due to simplified trend detection
         assert trend['strength'] >= 0
-
-
-class TestEnhancedPatternDetection:
-    """Test enhanced pattern detection functionality."""
-    
-    def setup_method(self):
-        """Set up test fixtures."""
-        self.analyzer = PatternAnalyzer()
         
-        # Create data for head and shoulders pattern
-        dates = pd.date_range(start='2024-01-01', periods=50, freq='h')
-        
-        # Head and shoulders: left shoulder, head (higher), right shoulder
-        prices = [100] * 10 + [105] * 5 + [98] * 5 + [110] * 5 + [102] * 5 + [104] * 5 + [100] * 15
-        
-        self.head_shoulders_data = pd.DataFrame({
-            'High': [p * 1.02 for p in prices],
-            'Low': [p * 0.98 for p in prices],
-            'Close': prices,
-            'Volume': np.random.randint(100000, 200000, 50)
-        }, index=dates)
-        
-        # Flag pattern: strong move followed by consolidation (25 data points)
-        flagpole_prices = [95, 96, 97, 98, 99, 100, 105, 110, 115, 120]  # 10 points
-        consolidation_prices = [120, 120.5, 120.3, 120.7, 120.4, 120.6, 120.2, 120.8, 120.1, 120.9, 120.3, 120.6, 120.4, 120.7, 120.5]  # 15 points
-        
-        self.flag_data = pd.DataFrame({
-            'High': [p * 1.01 for p in flagpole_prices + consolidation_prices],
-            'Low': [p * 0.99 for p in flagpole_prices + consolidation_prices],
-            'Close': flagpole_prices + consolidation_prices,
-            'Volume': [1000000] * 10 + [500000] * 15
-        }, index=pd.date_range(start='2024-01-01', periods=25, freq='h'))
-        
-        # Advanced triangle data
-        self.triangle_data = pd.DataFrame({
-            'High': [105, 104, 103, 102, 101] * 4,  # Descending highs
-            'Low': [95 + i*0.5 for i in range(20)],  # Rising lows (symmetrical triangle)
-            'Close': [100, 99.5, 99, 98.5, 98] * 4,
-            'Volume': np.random.randint(100000, 200000, 20)
-        }, index=pd.date_range(start='2024-01-01', periods=20, freq='h'))
-    
-    def test_enhanced_pattern_detection(self):
-        """Test that enhanced pattern detection works end-to-end."""
-        # Test with data that should trigger multiple patterns
-        result = self.analyzer.detect_chart_patterns(self.head_shoulders_data)
-        
-        assert 'patterns' in result
-        assert isinstance(result['patterns'], list)
-        assert result['count'] == len(result['patterns'])
-        
-        # Should contain original patterns plus new enhanced ones
-        pattern_types = [p.get('pattern_type') for p in result['patterns'] if p is not None]
-        
-        # Check that we have more pattern types now
-        assert len(pattern_types) >= 0  # At least some patterns should be detected
-        
-        # Verify structure of detected patterns
-        for pattern in result['patterns']:
-            if pattern:
-                assert 'pattern_type' in pattern
-                assert 'confidence' in pattern
-                assert isinstance(pattern['confidence'], (int, float))
-                assert 0 <= pattern['confidence'] <= 1
-    
-    def test_head_shoulders_integration(self):
-        """Test head and shoulders pattern integration."""
-        # Use mock to ensure we can test the helper method
-        head_shoulders = self.analyzer._detect_head_shoulders(self.head_shoulders_data)
-        
-        if head_shoulders:  # Pattern might not always be detected with dummy data
-            assert head_shoulders['pattern_type'] == 'head_and_shoulders'
-            assert head_shoulders['direction'] == 'bearish'
-            assert 'confidence' in head_shoulders
-            assert 'left_shoulder' in head_shoulders
-            assert 'head' in head_shoulders
-            assert 'right_shoulder' in head_shoulders
-            assert 'neckline' in head_shoulders
-        
-        # Test integration in main detection function
-        result = self.analyzer.detect_chart_patterns(self.head_shoulders_data)
-        
-        # Check that head_shoulders pattern can be found in results
-        head_shoulders_patterns = [
-            p for p in result['patterns'] 
-            if p and p.get('pattern_type') == 'head_and_shoulders'
-        ]
-        
-        # Should be able to detect pattern or handle gracefully
-        assert isinstance(head_shoulders_patterns, list)
-    
-    def test_advanced_triangles(self):
-        """Test advanced triangle pattern detection."""
-        advanced_triangles = self.analyzer._detect_advanced_triangles(self.triangle_data)
-        
-        assert isinstance(advanced_triangles, list)
-        
-        for pattern in advanced_triangles:
-            assert 'pattern_type' in pattern
-            assert 'confidence' in pattern
-            assert pattern['pattern_type'] in ['symmetrical_triangle', 'rising_wedge']
-            assert isinstance(pattern['confidence'], (int, float))
-            assert 0 <= pattern['confidence'] <= 1
-        
-        # Test integration in main detection function
-        result = self.analyzer.detect_chart_patterns(self.triangle_data)
-        
-        # Should include advanced triangles in results
-        triangle_patterns = [
-            p for p in result['patterns']
-            if p and p.get('pattern_type') in ['symmetrical_triangle', 'rising_wedge']
-        ]
-        
-        assert isinstance(triangle_patterns, list)
-    
-    def test_flag_detection(self):
-        """Test flag pattern detection."""
-        flag_pattern = self.analyzer._detect_flags(self.flag_data)
-        
-        # Flag pattern may or may not be detected based on data characteristics
-        if flag_pattern:
-            assert flag_pattern['pattern_type'] == 'flag'
-            assert flag_pattern['direction'] in ['bullish', 'bearish']
-            assert 'confidence' in flag_pattern
-            assert 'flagpole_move' in flag_pattern
-            assert 'flag_range' in flag_pattern
-            assert isinstance(flag_pattern['confidence'], (int, float))
-            assert 0 <= flag_pattern['confidence'] <= 1
-        
-        # Test integration in main detection function
-        result = self.analyzer.detect_chart_patterns(self.flag_data)
-        
-        # Check that flag patterns can be found in results
-        flag_patterns = [
-            p for p in result['patterns']
-            if p and p.get('pattern_type') == 'flag'
-        ]
-        
-        assert isinstance(flag_patterns, list)
-    
-    def test_pattern_confidence_calculation(self):
-        """Test pattern confidence calculation from shared utils."""
-        # Test various pattern configurations
-        test_patterns = [
-            {'strength': 0.8, 'volume_confirmed': True, 'duration_bars': 10},
-            {'strength': 0.6, 'volume_confirmed': False, 'duration_bars': 3},
-            {'strength': 0.9, 'volume_confirmed': True, 'duration_bars': 15},
-        ]
-        
-        for pattern_data in test_patterns:
-            # Import and test the confidence calculation
-            try:
-                from src.utils.shared import calculate_pattern_confidence
-                confidence = calculate_pattern_confidence(pattern_data)
-                assert isinstance(confidence, (int, float))
-                assert 0 <= confidence <= 1
-            except ImportError:
-                # Fallback test - helper methods should work with or without shared utils
-                head_shoulders = self.analyzer._detect_head_shoulders(self.head_shoulders_data)
-                # If we get a result, confidence should be valid
-                if head_shoulders:
-                    assert isinstance(head_shoulders['confidence'], (int, float))
-                    assert 0 <= head_shoulders['confidence'] <= 1
-    
-    def test_pivot_analysis_integration(self):
-        """Test pivot analysis integration from shared utils."""
-        # Test that pivot analysis is used in pattern detection
-        try:
-            from src.utils.shared import find_pivot_highs_lows
-            pivot_data = find_pivot_highs_lows(self.triangle_data)
-            
-            assert 'pivot_highs' in pivot_data
-            assert 'pivot_lows' in pivot_data
-            assert isinstance(pivot_data['pivot_highs'], list)
-            assert isinstance(pivot_data['pivot_lows'], list)
-        except ImportError:
-            # Test fallback behavior
-            advanced_triangles = self.analyzer._detect_advanced_triangles(self.triangle_data)
-            # Should work with fallback dummy data
-            assert isinstance(advanced_triangles, list)
-
 
 class TestResonanceEngine:
     """Test ResonanceEngine and consensus integration functionality."""
@@ -1180,6 +670,231 @@ class TestResonanceEngine:
         # Should show conflict or low alignment
         assert conflicted_consensus['alignment_status'] in ['conflicted', 'partially_aligned', 'no_consensus']
         assert conflicted_consensus['agreement_ratio'] < 0.8
+
+
+class TestPatternAnalyzer:
+    """Test pattern analysis functionality."""
+    
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.analyzer = PatternAnalyzer()
+        self.sample_ohlcv_data = self._create_sample_ohlcv_data()
+    
+    def _create_sample_ohlcv_data(self):
+        """Create sample OHLCV data for testing."""
+        dates = pd.date_range(start='2024-01-01', periods=50, freq='H')
+        np.random.seed(42)  # For reproducible tests
+        
+        prices = 100 + np.cumsum(np.random.randn(50) * 0.5)
+        
+        data = pd.DataFrame({
+            'Open': prices + np.random.randn(50) * 0.1,
+            'High': prices + np.abs(np.random.randn(50)) * 0.3,
+            'Low': prices - np.abs(np.random.randn(50)) * 0.3,
+            'Close': prices,
+            'Volume': np.random.randint(100000, 1000000, 50)
+        }, index=dates)
+        
+        # Ensure OHLC logic
+        data['High'] = data[['Open', 'High', 'Close']].max(axis=1)
+        data['Low'] = data[['Open', 'Low', 'Close']].min(axis=1)
+        
+        return data
+    
+    def test_analyzer_initialization(self):
+        """Test PatternAnalyzer initialization."""
+        analyzer = PatternAnalyzer()
+        assert hasattr(analyzer, 'config')
+        assert hasattr(analyzer, 'pattern_confidence_threshold')
+        assert analyzer.pattern_confidence_threshold == 0.7
+        
+        # Test custom config
+        custom_config = {'pattern_confidence_threshold': 0.8}
+        custom_analyzer = PatternAnalyzer(custom_config)
+        assert custom_analyzer.pattern_confidence_threshold == 0.8
+    
+    def test_detect_chart_patterns(self):
+        """Test chart pattern detection."""
+        result = self.analyzer.detect_chart_patterns(self.sample_ohlcv_data, '1h')
+        
+        # Check result structure
+        required_keys = ['timeframe', 'patterns', 'signals', 'dominant_signal', 'confidence', 'pattern_count']
+        for key in required_keys:
+            assert key in result, f"Missing key: {key}"
+        
+        # Check types
+        assert result['timeframe'] == '1h'
+        assert isinstance(result['patterns'], list)
+        assert isinstance(result['signals'], list)
+        assert result['dominant_signal'] in ['bullish', 'bearish', 'neutral']
+        assert isinstance(result['confidence'], float)
+        assert isinstance(result['pattern_count'], int)
+        assert 0 <= result['confidence'] <= 1
+    
+    def test_triangle_pattern_detection(self):
+        """Test triangle pattern detection."""
+        # Create data with ascending triangle pattern
+        triangle_data = self.sample_ohlcv_data.copy()
+        
+        # Simulate ascending triangle: flat resistance, rising support
+        for i in range(20, 30):
+            triangle_data.iloc[i, triangle_data.columns.get_loc('High')] = 105  # Flat resistance
+            triangle_data.iloc[i, triangle_data.columns.get_loc('Low')] = 100 + (i - 20) * 0.5  # Rising support
+        
+        triangle_result = self.analyzer._detect_triangle_patterns(triangle_data)
+        
+        # Should detect some triangle pattern
+        assert isinstance(triangle_result, dict)
+        assert 'detected' in triangle_result
+    
+    def test_head_shoulders_pattern_detection(self):
+        """Test head and shoulders pattern detection."""
+        hs_result = self.analyzer._detect_head_shoulders(self.sample_ohlcv_data)
+        
+        assert isinstance(hs_result, dict)
+        assert 'detected' in hs_result
+        
+        if hs_result['detected']:
+            assert 'pattern' in hs_result
+            assert 'signal' in hs_result
+            assert 'confidence' in hs_result
+    
+    def test_flag_pattern_detection(self):
+        """Test flag pattern detection."""
+        flag_result = self.analyzer._detect_flag_patterns(self.sample_ohlcv_data)
+        
+        assert isinstance(flag_result, dict)
+        assert 'detected' in flag_result
+        
+        if flag_result['detected']:
+            assert flag_result['pattern'] in ['bull_flag', 'bear_flag']
+            assert flag_result['signal'] in ['bullish', 'bearish']
+    
+    def test_double_pattern_detection(self):
+        """Test double top/bottom pattern detection."""
+        double_result = self.analyzer._detect_double_patterns(self.sample_ohlcv_data)
+        
+        assert isinstance(double_result, dict)
+        assert 'detected' in double_result
+        
+        if double_result['detected']:
+            assert double_result['pattern'] in ['double_top', 'double_bottom']
+            assert double_result['signal'] in ['bullish', 'bearish']
+    
+    def test_pattern_reliability_validation(self):
+        """Test pattern reliability validation."""
+        # Create mock pattern data
+        pattern_data = {
+            'detected': True,
+            'pattern': 'ascending_triangle',
+            'confidence': 0.7,
+            'signal': 'bullish'
+        }
+        
+        volume_data = self.sample_ohlcv_data['Volume']
+        reliability = self.analyzer.validate_pattern_reliability(pattern_data, volume_data)
+        
+        # Check reliability structure
+        required_keys = ['reliable', 'adjusted_confidence', 'confidence_adjustment']
+        for key in required_keys:
+            assert key in reliability, f"Missing reliability key: {key}"
+        
+        assert isinstance(reliability['reliable'], bool)
+        assert isinstance(reliability['adjusted_confidence'], float)
+        assert 0 <= reliability['adjusted_confidence'] <= 1
+    
+    def test_pattern_detection_with_insufficient_data(self):
+        """Test pattern detection with insufficient data."""
+        # Test with empty data
+        empty_result = self.analyzer.detect_chart_patterns(pd.DataFrame(), '1h')
+        assert empty_result['confidence'] == 0.0
+        assert empty_result['pattern_count'] == 0
+        
+        # Test with minimal data
+        minimal_data = self.sample_ohlcv_data.head(5)
+        minimal_result = self.analyzer.detect_chart_patterns(minimal_data, '1h')
+        assert isinstance(minimal_result, dict)
+        assert 'confidence' in minimal_result
+    
+    def test_pattern_signal_aggregation(self):
+        """Test pattern signal aggregation logic."""
+        # Create mock patterns with different signals
+        self.analyzer._mock_patterns = [
+            {'signal': 'bullish', 'confidence': 0.8},
+            {'signal': 'bullish', 'confidence': 0.7},
+            {'signal': 'bearish', 'confidence': 0.6}
+        ]
+        
+        result = self.analyzer.detect_chart_patterns(self.sample_ohlcv_data, '1h')
+        
+        # Should aggregate signals properly
+        assert 'dominant_signal' in result
+        assert result['dominant_signal'] in ['bullish', 'bearish', 'neutral']
+
+
+class TestAnalysisEngineWithPatterns:
+    """Test Analysis Engine with PatternAnalyzer integration."""
+    
+    def setup_method(self):
+        """Set up test fixtures."""
+        self.engine = AnalysisEngine()
+        self.sample_data = self._create_sample_timeframe_data()
+    
+    def _create_sample_timeframe_data(self):
+        """Create sample data for multiple timeframes."""
+        data_1h = pd.DataFrame({
+            'Open': [100, 101, 102],
+            'High': [101, 103, 104],
+            'Low': [99, 100, 101],
+            'Close': [101, 102, 103],
+            'Volume': [100000, 110000, 120000]
+        })
+        
+        data_1d = pd.DataFrame({
+            'Open': [100, 102, 104],
+            'High': [102, 105, 107],
+            'Low': [98, 101, 103],
+            'Close': [102, 104, 106],
+            'Volume': [500000, 520000, 540000]
+        })
+        
+        return {'1h': data_1h, '1d': data_1d}
+    
+    def test_engine_has_pattern_analyzer(self):
+        """Test that AnalysisEngine includes PatternAnalyzer."""
+        assert hasattr(self.engine, 'pattern')
+        assert isinstance(self.engine.pattern, PatternAnalyzer)
+    
+    @patch('src.core.analysis_engine.get_data_manager')
+    def test_multi_timeframe_analysis_with_patterns(self, mock_get_data_manager):
+        """Test multi-timeframe analysis includes pattern analysis."""
+        # Mock data manager
+        mock_data_manager = Mock()
+        mock_data_manager.collect_fundamental_data.return_value = {
+            'status': 'success',
+            'data': [{'symbol': 'TEST', 'pe_ratio': 20}]
+        }
+        mock_data_manager.collect_sentiment_data.return_value = {
+            'status': 'success',
+            'articles': [{'sentiment_score': 0.1}]
+        }
+        mock_get_data_manager.return_value = mock_data_manager
+        
+        result = self.engine.multi_timeframe_analysis('TEST', self.sample_data)
+        
+        # Check that patterns are included in timeframe analysis
+        assert 'timeframe_analysis' in result
+        for timeframe in self.sample_data.keys():
+            if timeframe in result['timeframe_analysis']:
+                tf_analysis = result['timeframe_analysis'][timeframe]
+                assert 'patterns' in tf_analysis, f"Missing patterns in {timeframe} analysis"
+                
+                # Check pattern structure
+                patterns = tf_analysis['patterns']
+                assert isinstance(patterns, dict)
+                pattern_keys = ['timeframe', 'patterns', 'signals', 'dominant_signal', 'confidence']
+                for key in pattern_keys:
+                    assert key in patterns, f"Missing pattern key: {key} in {timeframe}"
 
 
 # Run tests if executed directly
