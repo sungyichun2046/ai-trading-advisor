@@ -20,10 +20,13 @@ from typing import Dict, List, Optional, Any, Union, Tuple
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
-from dataclasses import dataclass, asdict
 from enum import Enum
 
 from config.supabase_config import get_supabase_manager, SupabaseManager
+from src.models.validation_models import (
+    UserProfile, ActiveSymbol, MarketData, TechnicalAnalysis, 
+    SentimentAnalysis, TradingDecision, DagRun
+)
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -58,70 +61,7 @@ class PortfolioType(Enum):
     PAPER = "paper"
     LIVE = "live"
 
-# Data classes for type safety
-@dataclass
-class UserProfile:
-    """User profile data structure."""
-    id: Optional[UUID] = None
-    email: str = ""
-    display_name: str = ""
-    trading_style: TradingStyle = TradingStyle.LONG_TERM
-    risk_tolerance: RiskTolerance = RiskTolerance.MODERATE
-    investment_horizon: InvestmentHorizon = InvestmentHorizon.MEDIUM
-    preferred_sectors: List[str] = None
-    max_position_size: Decimal = Decimal('10.00')
-    auto_rebalance: bool = False
-    notification_preferences: Dict[str, Any] = None
-    is_active: bool = True
-    subscription_tier: str = "free"
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-    last_login: Optional[datetime] = None
-
-    def __post_init__(self):
-        if self.preferred_sectors is None:
-            self.preferred_sectors = []
-        if self.notification_preferences is None:
-            self.notification_preferences = {}
-
-@dataclass
-class Portfolio:
-    """Portfolio data structure."""
-    id: Optional[UUID] = None
-    user_id: Optional[UUID] = None
-    portfolio_name: str = ""
-    portfolio_type: PortfolioType = PortfolioType.SIMULATION
-    initial_balance: Decimal = Decimal('100000.00')
-    current_cash: Decimal = Decimal('100000.00')
-    total_value: Decimal = Decimal('100000.00')
-    unrealized_pnl: Decimal = Decimal('0.00')
-    realized_pnl: Decimal = Decimal('0.00')
-    performance_benchmark: str = "SPY"
-    is_active: bool = True
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-    last_rebalance: Optional[datetime] = None
-
-@dataclass
-class Trade:
-    """Trade data structure."""
-    id: Optional[UUID] = None
-    portfolio_id: Optional[UUID] = None
-    symbol: str = ""
-    trade_type: TradeType = TradeType.BUY
-    order_type: OrderType = OrderType.MARKET
-    quantity: Decimal = Decimal('0')
-    price: Decimal = Decimal('0')
-    total_amount: Decimal = Decimal('0')
-    commission: Decimal = Decimal('0')
-    strategy_used: Optional[str] = None
-    confidence_score: Optional[Decimal] = None
-    entry_reason: Optional[str] = None
-    exit_reason: Optional[str] = None
-    holding_period: Optional[timedelta] = None
-    position_size_pct: Optional[Decimal] = None
-    executed_at: Optional[datetime] = None
-    created_at: Optional[datetime] = None
+# All data models are now imported from validation_models.py
 
 class TradingDatabaseManager:
     """
@@ -144,7 +84,7 @@ class TradingDatabaseManager:
     # USER PROFILE MANAGEMENT
     # =====================================================================
     
-    def create_user_profile(self, profile: UserProfile) -> UUID:
+    def create_user_profile(self, profile: UserProfile) -> str:
         """
         Create a new user profile.
         
@@ -152,7 +92,7 @@ class TradingDatabaseManager:
             profile: UserProfile object with user information
             
         Returns:
-            UUID: ID of the created user profile
+            str: ID of the created user profile
             
         Raises:
             ValueError: If profile data is invalid
@@ -165,37 +105,29 @@ class TradingDatabaseManager:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
                 
-                # Generate new ID if not provided
-                profile_id = profile.id or uuid4()
-                
                 cursor.execute("""
                     INSERT INTO user_profiles (
-                        id, email, display_name, trading_style, risk_tolerance, 
-                        investment_horizon, preferred_sectors, max_position_size,
-                        auto_rebalance, notification_preferences, is_active, subscription_tier
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        user_id, budget, risk_tolerance, trading_style, interested_symbols
+                    ) VALUES (%s, %s, %s, %s, %s)
                 """, (
-                    profile_id, profile.email, profile.display_name,
-                    profile.trading_style.value, profile.risk_tolerance.value,
-                    profile.investment_horizon.value, profile.preferred_sectors,
-                    profile.max_position_size, profile.auto_rebalance,
-                    profile.notification_preferences, profile.is_active, profile.subscription_tier
+                    profile.user_id, profile.budget, profile.risk_tolerance,
+                    profile.trading_style, profile.interested_symbols
                 ))
                 
                 conn.commit()
-                logger.info(f"Created user profile: {profile.email} (ID: {profile_id})")
-                return profile_id
+                logger.info(f"Created user profile: {profile.user_id}")
+                return profile.user_id
                 
         except Exception as e:
             logger.error(f"Failed to create user profile: {e}")
             raise
     
-    def get_user_profile(self, user_id: UUID) -> Optional[UserProfile]:
+    def get_user_profile(self, user_id: str) -> Optional[UserProfile]:
         """
         Retrieve a user profile by ID.
         
         Args:
-            user_id: UUID of the user
+            user_id: ID of the user
             
         Returns:
             UserProfile object or None if not found
@@ -205,27 +137,17 @@ class TradingDatabaseManager:
                 cursor = conn.cursor()
                 
                 cursor.execute("""
-                    SELECT id, email, display_name, trading_style, risk_tolerance,
-                           investment_horizon, preferred_sectors, max_position_size,
-                           auto_rebalance, notification_preferences, is_active,
-                           subscription_tier, created_at, updated_at, last_login
+                    SELECT user_id, budget, risk_tolerance, trading_style, interested_symbols, created_at
                     FROM user_profiles
-                    WHERE id = %s AND is_active = true
+                    WHERE user_id = %s
                 """, (user_id,))
                 
                 row = cursor.fetchone()
                 if row:
                     return UserProfile(
-                        id=row[0], email=row[1], display_name=row[2],
-                        trading_style=TradingStyle(row[3]),
-                        risk_tolerance=RiskTolerance(row[4]),
-                        investment_horizon=InvestmentHorizon(row[5]),
-                        preferred_sectors=row[6] or [],
-                        max_position_size=row[7],
-                        auto_rebalance=row[8],
-                        notification_preferences=row[9] or {},
-                        is_active=row[10], subscription_tier=row[11],
-                        created_at=row[12], updated_at=row[13], last_login=row[14]
+                        user_id=row[0], budget=row[1], risk_tolerance=row[2],
+                        trading_style=row[3], interested_symbols=row[4] or [],
+                        created_at=row[5]
                     )
                 
                 return None
@@ -234,7 +156,7 @@ class TradingDatabaseManager:
             logger.error(f"Failed to get user profile {user_id}: {e}")
             return None
     
-    def update_user_profile(self, user_id: UUID, updates: Dict[str, Any]) -> bool:
+    def update_user_profile(self, user_id: str, updates: Dict[str, Any]) -> bool:
         """
         Update a user profile with the given changes.
         
@@ -299,374 +221,299 @@ class TradingDatabaseManager:
             return False
     
     # =====================================================================
-    # PORTFOLIO MANAGEMENT
+    # ACTIVE SYMBOLS MANAGEMENT
     # =====================================================================
     
-    def create_portfolio(self, portfolio: Portfolio) -> UUID:
+    def add_active_symbol(self, symbol: str, user_id: str) -> bool:
         """
-        Create a new portfolio for a user.
+        Add a symbol to active_symbols or update existing one.
         
         Args:
-            portfolio: Portfolio object with portfolio information
+            symbol: Stock symbol to add
+            user_id: User ID who requested the symbol
             
         Returns:
-            UUID: ID of the created portfolio
+            bool: True if successful
         """
-        self._validate_portfolio(portfolio)
-        
         try:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
                 
-                portfolio_id = portfolio.id or uuid4()
-                
+                # Check if symbol exists
                 cursor.execute("""
-                    INSERT INTO portfolios (
-                        id, user_id, portfolio_name, portfolio_type,
-                        initial_balance, current_cash, total_value,
-                        unrealized_pnl, realized_pnl, performance_benchmark, is_active
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (
-                    portfolio_id, portfolio.user_id, portfolio.portfolio_name,
-                    portfolio.portfolio_type.value, portfolio.initial_balance,
-                    portfolio.current_cash, portfolio.total_value,
-                    portfolio.unrealized_pnl, portfolio.realized_pnl,
-                    portfolio.performance_benchmark, portfolio.is_active
-                ))
+                    SELECT added_by_users FROM active_symbols WHERE symbol = %s
+                """, (symbol,))
                 
-                conn.commit()
-                logger.info(f"Created portfolio: {portfolio.portfolio_name} (ID: {portfolio_id})")
-                return portfolio_id
-                
-        except Exception as e:
-            logger.error(f"Failed to create portfolio: {e}")
-            raise
-    
-    def get_user_portfolios(self, user_id: UUID, active_only: bool = True) -> List[Portfolio]:
-        """
-        Get all portfolios for a user.
-        
-        Args:
-            user_id: UUID of the user
-            active_only: Whether to return only active portfolios
-            
-        Returns:
-            List of Portfolio objects
-        """
-        try:
-            with self.db_manager.get_connection() as conn:
-                cursor = conn.cursor()
-                
-                query = """
-                    SELECT id, user_id, portfolio_name, portfolio_type,
-                           initial_balance, current_cash, total_value,
-                           unrealized_pnl, realized_pnl, performance_benchmark,
-                           is_active, created_at, updated_at, last_rebalance
-                    FROM portfolios
-                    WHERE user_id = %s
-                """
-                
-                params = [user_id]
-                if active_only:
-                    query += " AND is_active = true"
-                
-                query += " ORDER BY created_at DESC"
-                
-                cursor.execute(query, params)
-                
-                portfolios = []
-                for row in cursor.fetchall():
-                    portfolios.append(Portfolio(
-                        id=row[0], user_id=row[1], portfolio_name=row[2],
-                        portfolio_type=PortfolioType(row[3]),
-                        initial_balance=row[4], current_cash=row[5], total_value=row[6],
-                        unrealized_pnl=row[7], realized_pnl=row[8],
-                        performance_benchmark=row[9], is_active=row[10],
-                        created_at=row[11], updated_at=row[12], last_rebalance=row[13]
-                    ))
-                
-                return portfolios
-                
-        except Exception as e:
-            logger.error(f"Failed to get portfolios for user {user_id}: {e}")
-            return []
-    
-    def update_portfolio_balance(self, portfolio_id: UUID, 
-                               current_cash: Decimal, total_value: Decimal,
-                               unrealized_pnl: Decimal, realized_pnl: Decimal) -> bool:
-        """
-        Update portfolio balance and P&L information.
-        
-        Args:
-            portfolio_id: UUID of the portfolio
-            current_cash: Current cash balance
-            total_value: Total portfolio value
-            unrealized_pnl: Unrealized profit/loss
-            realized_pnl: Realized profit/loss
-            
-        Returns:
-            bool: True if update was successful
-        """
-        try:
-            with self.db_manager.get_connection() as conn:
-                cursor = conn.cursor()
-                
-                cursor.execute("""
-                    UPDATE portfolios
-                    SET current_cash = %s, total_value = %s,
-                        unrealized_pnl = %s, realized_pnl = %s, updated_at = NOW()
-                    WHERE id = %s AND is_active = true
-                """, (current_cash, total_value, unrealized_pnl, realized_pnl, portfolio_id))
-                
-                updated_rows = cursor.rowcount
-                conn.commit()
-                
-                if updated_rows > 0:
-                    logger.debug(f"Updated portfolio {portfolio_id} balance")
-                    return True
+                row = cursor.fetchone()
+                if row:
+                    # Update existing symbol
+                    added_by_users = row[0] or []
+                    if user_id not in added_by_users:
+                        added_by_users.append(user_id)
+                    
+                    cursor.execute("""
+                        UPDATE active_symbols 
+                        SET added_by_users = %s, last_updated = NOW()
+                        WHERE symbol = %s
+                    """, (added_by_users, symbol))
                 else:
-                    logger.warning(f"No portfolio found for ID {portfolio_id}")
-                    return False
+                    # Insert new symbol
+                    cursor.execute("""
+                        INSERT INTO active_symbols (symbol, added_by_users, last_updated, is_active)
+                        VALUES (%s, %s, NOW(), true)
+                    """, (symbol, [user_id]))
+                
+                conn.commit()
+                logger.info(f"Added active symbol: {symbol} for user {user_id}")
+                return True
                 
         except Exception as e:
-            logger.error(f"Failed to update portfolio balance {portfolio_id}: {e}")
+            logger.error(f"Failed to add active symbol {symbol}: {e}")
             return False
     
-    # =====================================================================
-    # TRADE MANAGEMENT
-    # =====================================================================
-    
-    def record_trade(self, trade: Trade) -> UUID:
-        """
-        Record a new trade execution.
-        
-        Args:
-            trade: Trade object with trade information
-            
-        Returns:
-            UUID: ID of the recorded trade
-        """
-        self._validate_trade(trade)
-        
+    def get_active_symbols(self) -> List[str]:
+        """Get all active symbols."""
         try:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
-                
-                trade_id = trade.id or uuid4()
-                executed_at = trade.executed_at or datetime.utcnow()
                 
                 cursor.execute("""
-                    INSERT INTO trades (
-                        id, portfolio_id, symbol, trade_type, order_type,
-                        quantity, price, total_amount, commission,
-                        strategy_used, confidence_score, entry_reason,
-                        exit_reason, holding_period, position_size_pct, executed_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """, (
-                    trade_id, trade.portfolio_id, trade.symbol,
-                    trade.trade_type.value, trade.order_type.value,
-                    trade.quantity, trade.price, trade.total_amount, trade.commission,
-                    trade.strategy_used, trade.confidence_score, trade.entry_reason,
-                    trade.exit_reason, trade.holding_period, trade.position_size_pct,
-                    executed_at
-                ))
+                    SELECT symbol FROM active_symbols WHERE is_active = true
+                """)
                 
-                conn.commit()
-                logger.info(f"Recorded trade: {trade.symbol} {trade.trade_type.value} (ID: {trade_id})")
-                return trade_id
+                return [row[0] for row in cursor.fetchall()]
                 
         except Exception as e:
-            logger.error(f"Failed to record trade: {e}")
-            raise
-    
-    def get_portfolio_trades(self, portfolio_id: UUID, 
-                           symbol: Optional[str] = None,
-                           start_date: Optional[datetime] = None,
-                           end_date: Optional[datetime] = None,
-                           limit: int = 100) -> List[Trade]:
-        """
-        Get trades for a portfolio with optional filtering.
-        
-        Args:
-            portfolio_id: UUID of the portfolio
-            symbol: Optional symbol filter
-            start_date: Optional start date filter
-            end_date: Optional end date filter
-            limit: Maximum number of trades to return
-            
-        Returns:
-            List of Trade objects
-        """
-        try:
-            with self.db_manager.get_connection() as conn:
-                cursor = conn.cursor()
-                
-                query = """
-                    SELECT id, portfolio_id, symbol, trade_type, order_type,
-                           quantity, price, total_amount, commission,
-                           strategy_used, confidence_score, entry_reason,
-                           exit_reason, holding_period, position_size_pct,
-                           executed_at, created_at
-                    FROM trades
-                    WHERE portfolio_id = %s
-                """
-                
-                params = [portfolio_id]
-                
-                if symbol:
-                    query += " AND symbol = %s"
-                    params.append(symbol)
-                
-                if start_date:
-                    query += " AND executed_at >= %s"
-                    params.append(start_date)
-                
-                if end_date:
-                    query += " AND executed_at <= %s"
-                    params.append(end_date)
-                
-                query += " ORDER BY executed_at DESC LIMIT %s"
-                params.append(limit)
-                
-                cursor.execute(query, params)
-                
-                trades = []
-                for row in cursor.fetchall():
-                    trades.append(Trade(
-                        id=row[0], portfolio_id=row[1], symbol=row[2],
-                        trade_type=TradeType(row[3]), order_type=OrderType(row[4]),
-                        quantity=row[5], price=row[6], total_amount=row[7], commission=row[8],
-                        strategy_used=row[9], confidence_score=row[10],
-                        entry_reason=row[11], exit_reason=row[12], holding_period=row[13],
-                        position_size_pct=row[14], executed_at=row[15], created_at=row[16]
-                    ))
-                
-                return trades
-                
-        except Exception as e:
-            logger.error(f"Failed to get trades for portfolio {portfolio_id}: {e}")
+            logger.error(f"Failed to get active symbols: {e}")
             return []
     
     # =====================================================================
-    # PERFORMANCE METRICS
+    # MARKET DATA MANAGEMENT
     # =====================================================================
     
-    def calculate_portfolio_performance(self, portfolio_id: UUID) -> Dict[str, Any]:
-        """
-        Calculate comprehensive performance metrics for a portfolio.
-        
-        Args:
-            portfolio_id: UUID of the portfolio
-            
-        Returns:
-            Dict containing performance metrics
-        """
+    def store_market_data(self, market_data: MarketData) -> int:
+        """Store market data for a symbol."""
         try:
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
                 
-                # Get portfolio info
                 cursor.execute("""
-                    SELECT initial_balance, total_value, unrealized_pnl, realized_pnl,
-                           created_at
-                    FROM portfolios
-                    WHERE id = %s
-                """, (portfolio_id,))
+                    INSERT INTO market_data (
+                        run_timestamp, symbol, price, volume, open_price, high_price,
+                        low_price, close_price, market_cap, pe_ratio, data_source
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (
+                    market_data.run_timestamp or datetime.utcnow(),
+                    market_data.symbol, market_data.price, market_data.volume,
+                    market_data.open_price, market_data.high_price, market_data.low_price,
+                    market_data.close_price, market_data.market_cap, market_data.pe_ratio,
+                    market_data.data_source
+                ))
                 
-                portfolio_row = cursor.fetchone()
-                if not portfolio_row:
-                    return {'error': 'Portfolio not found'}
-                
-                initial_balance = portfolio_row[0]
-                total_value = portfolio_row[1]
-                unrealized_pnl = portfolio_row[2]
-                realized_pnl = portfolio_row[3]
-                created_at = portfolio_row[4]
-                
-                # Get trade statistics
-                cursor.execute("""
-                    SELECT 
-                        COUNT(*) as total_trades,
-                        COUNT(CASE WHEN trade_type = 'BUY' THEN 1 END) as buy_trades,
-                        COUNT(CASE WHEN trade_type = 'SELL' THEN 1 END) as sell_trades,
-                        SUM(total_amount * CASE WHEN trade_type = 'BUY' THEN -1 ELSE 1 END) as net_trading_amount,
-                        AVG(confidence_score) as avg_confidence
-                    FROM trades
-                    WHERE portfolio_id = %s
-                """, (portfolio_id,))
-                
-                trade_stats = cursor.fetchone()
-                
-                # Calculate metrics
-                total_return = total_value - initial_balance
-                total_return_pct = (total_return / initial_balance) * 100 if initial_balance > 0 else 0
-                
-                days_since_creation = (datetime.utcnow() - created_at).days
-                annualized_return = (total_return_pct / days_since_creation * 365) if days_since_creation > 0 else 0
-                
-                return {
-                    'portfolio_id': portfolio_id,
-                    'initial_balance': float(initial_balance),
-                    'current_value': float(total_value),
-                    'total_return': float(total_return),
-                    'total_return_pct': float(total_return_pct),
-                    'annualized_return_pct': float(annualized_return),
-                    'unrealized_pnl': float(unrealized_pnl),
-                    'realized_pnl': float(realized_pnl),
-                    'total_trades': trade_stats[0] if trade_stats else 0,
-                    'buy_trades': trade_stats[1] if trade_stats else 0,
-                    'sell_trades': trade_stats[2] if trade_stats else 0,
-                    'avg_confidence': float(trade_stats[4]) if trade_stats and trade_stats[4] else 0,
-                    'days_active': days_since_creation,
-                    'calculated_at': datetime.utcnow().isoformat()
-                }
+                market_id = cursor.fetchone()[0]
+                conn.commit()
+                logger.debug(f"Stored market data for {market_data.symbol}")
+                return market_id
                 
         except Exception as e:
-            logger.error(f"Failed to calculate portfolio performance {portfolio_id}: {e}")
-            return {'error': str(e)}
+            logger.error(f"Failed to store market data: {e}")
+            raise
+    
+    def get_latest_market_data(self, symbol: str) -> Optional[MarketData]:
+        """Get latest market data for a symbol."""
+        try:
+            with self.db_manager.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    SELECT id, run_timestamp, symbol, price, volume, open_price, high_price,
+                           low_price, close_price, market_cap, pe_ratio, data_source, created_at
+                    FROM market_data
+                    WHERE symbol = %s
+                    ORDER BY run_timestamp DESC
+                    LIMIT 1
+                """, (symbol,))
+                
+                row = cursor.fetchone()
+                if row:
+                    return MarketData(
+                        id=row[0], run_timestamp=row[1], symbol=row[2], price=row[3],
+                        volume=row[4], open_price=row[5], high_price=row[6], low_price=row[7],
+                        close_price=row[8], market_cap=row[9], pe_ratio=row[10],
+                        data_source=row[11], created_at=row[12]
+                    )
+                
+                return None
+                
+        except Exception as e:
+            logger.error(f"Failed to get market data for {symbol}: {e}")
+            return None
+    
+    # =====================================================================
+    # TECHNICAL ANALYSIS MANAGEMENT
+    # =====================================================================
+    
+    def store_technical_analysis(self, analysis: TechnicalAnalysis) -> int:
+        """Store technical analysis results."""
+        try:
+            with self.db_manager.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    INSERT INTO technical_analysis (
+                        run_timestamp, symbol, rsi, macd_value, macd_signal, macd_histogram,
+                        bb_upper, bb_middle, bb_lower, signal, confidence
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (
+                    analysis.run_timestamp or datetime.utcnow(), analysis.symbol, analysis.rsi,
+                    analysis.macd_value, analysis.macd_signal, analysis.macd_histogram,
+                    analysis.bb_upper, analysis.bb_middle, analysis.bb_lower,
+                    analysis.signal, analysis.confidence
+                ))
+                
+                analysis_id = cursor.fetchone()[0]
+                conn.commit()
+                logger.debug(f"Stored technical analysis for {analysis.symbol}")
+                return analysis_id
+                
+        except Exception as e:
+            logger.error(f"Failed to store technical analysis: {e}")
+            raise
+    
+    # =====================================================================
+    # SENTIMENT ANALYSIS MANAGEMENT
+    # =====================================================================
+    
+    def store_sentiment_analysis(self, sentiment: SentimentAnalysis) -> int:
+        """Store sentiment analysis results."""
+        try:
+            with self.db_manager.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    INSERT INTO sentiment_analysis (
+                        run_timestamp, symbol, sentiment_score, sentiment_label,
+                        confidence, article_count, data_source
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (
+                    sentiment.run_timestamp or datetime.utcnow(), sentiment.symbol,
+                    sentiment.sentiment_score, sentiment.sentiment_label,
+                    sentiment.confidence, sentiment.article_count, sentiment.data_source
+                ))
+                
+                sentiment_id = cursor.fetchone()[0]
+                conn.commit()
+                logger.debug(f"Stored sentiment analysis for {sentiment.symbol}")
+                return sentiment_id
+                
+        except Exception as e:
+            logger.error(f"Failed to store sentiment analysis: {e}")
+            raise
+    
+    # =====================================================================
+    # TRADING DECISIONS MANAGEMENT
+    # =====================================================================
+    
+    def store_trading_decision(self, decision: TradingDecision) -> int:
+        """Store trading decision."""
+        try:
+            with self.db_manager.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    INSERT INTO trading_decisions (
+                        run_timestamp, user_id, symbol, action, recommended_quantity,
+                        recommended_price, confidence, reasoning, budget_allocated, executed
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                """, (
+                    decision.run_timestamp or datetime.utcnow(), decision.user_id, decision.symbol,
+                    decision.action, decision.recommended_quantity, decision.recommended_price,
+                    decision.confidence, decision.reasoning, decision.budget_allocated, decision.executed
+                ))
+                
+                decision_id = cursor.fetchone()[0]
+                conn.commit()
+                logger.debug(f"Stored trading decision for {decision.user_id}: {decision.symbol}")
+                return decision_id
+                
+        except Exception as e:
+            logger.error(f"Failed to store trading decision: {e}")
+            raise
+    
+    def get_user_trading_decisions(self, user_id: str, limit: int = 50) -> List[TradingDecision]:
+        """Get trading decisions for a user."""
+        try:
+            with self.db_manager.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    SELECT id, run_timestamp, user_id, symbol, action, recommended_quantity,
+                           recommended_price, confidence, reasoning, budget_allocated,
+                           executed, created_at
+                    FROM trading_decisions
+                    WHERE user_id = %s
+                    ORDER BY run_timestamp DESC
+                    LIMIT %s
+                """, (user_id, limit))
+                
+                decisions = []
+                for row in cursor.fetchall():
+                    decisions.append(TradingDecision(
+                        id=row[0], run_timestamp=row[1], user_id=row[2], symbol=row[3],
+                        action=row[4], recommended_quantity=row[5], recommended_price=row[6],
+                        confidence=row[7], reasoning=row[8], budget_allocated=row[9],
+                        executed=row[10], created_at=row[11]
+                    ))
+                
+                return decisions
+                
+        except Exception as e:
+            logger.error(f"Failed to get trading decisions for user {user_id}: {e}")
+            return []
+    
+    # =====================================================================
+    # DAG RUN MANAGEMENT
+    # =====================================================================
+    
+    def record_dag_run(self, dag_run: DagRun) -> bool:
+        """Record DAG run execution."""
+        try:
+            with self.db_manager.get_connection() as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    INSERT INTO dag_runs (
+                        run_timestamp, dag_status, symbols_processed, users_served, execution_time_ms
+                    ) VALUES (%s, %s, %s, %s, %s)
+                """, (
+                    dag_run.run_timestamp or datetime.utcnow(), dag_run.dag_status,
+                    dag_run.symbols_processed, dag_run.users_served, dag_run.execution_time_ms
+                ))
+                
+                conn.commit()
+                logger.info(f"Recorded DAG run: {dag_run.dag_status}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"Failed to record DAG run: {e}")
+            return False
     
     # =====================================================================
     # DATA VALIDATION
     # =====================================================================
     
     def _validate_user_profile(self, profile: UserProfile) -> None:
-        """Validate user profile data."""
-        if not profile.email or '@' not in profile.email:
-            raise ValueError("Valid email address is required")
-        
-        if not profile.display_name or len(profile.display_name.strip()) < 2:
-            raise ValueError("Display name must be at least 2 characters")
-        
-        if profile.max_position_size <= 0 or profile.max_position_size > 100:
-            raise ValueError("Max position size must be between 0 and 100 percent")
-    
-    def _validate_portfolio(self, portfolio: Portfolio) -> None:
-        """Validate portfolio data."""
-        if not portfolio.user_id:
-            raise ValueError("User ID is required")
-        
-        if not portfolio.portfolio_name or len(portfolio.portfolio_name.strip()) < 2:
-            raise ValueError("Portfolio name must be at least 2 characters")
-        
-        if portfolio.initial_balance <= 0:
-            raise ValueError("Initial balance must be positive")
-    
-    def _validate_trade(self, trade: Trade) -> None:
-        """Validate trade data."""
-        if not trade.portfolio_id:
-            raise ValueError("Portfolio ID is required")
-        
-        if not trade.symbol or len(trade.symbol.strip()) < 1:
-            raise ValueError("Symbol is required")
-        
-        if trade.quantity <= 0:
-            raise ValueError("Quantity must be positive")
-        
-        if trade.price <= 0:
-            raise ValueError("Price must be positive")
-        
-        if trade.total_amount <= 0:
-            raise ValueError("Total amount must be positive")
+        """Validate user profile data using Pydantic validation."""
+        # Pydantic models now handle validation automatically
+        try:
+            # This will trigger pydantic validation
+            profile.model_validate(profile.model_dump())
+        except Exception as e:
+            raise ValueError(f"Invalid user profile: {e}")
     
     # =====================================================================
     # UTILITY METHODS
@@ -683,13 +530,13 @@ class TradingDatabaseManager:
             health = self.db_manager.health_check()
             table_sizes = self.db_manager.get_table_sizes()
             
-            # Get record counts
+            # Get record counts for new schema tables
             with self.db_manager.get_connection() as conn:
                 cursor = conn.cursor()
                 
                 record_counts = {}
-                tables = ['user_profiles', 'portfolios', 'trades', 'market_data', 
-                         'performance_metrics', 'notification_settings']
+                tables = ['user_profiles', 'active_symbols', 'market_data', 
+                         'technical_analysis', 'sentiment_analysis', 'trading_decisions', 'dag_runs']
                 
                 for table in tables:
                     try:
@@ -723,8 +570,6 @@ def get_trading_db_manager() -> TradingDatabaseManager:
 
 # Example usage and testing
 if __name__ == "__main__":
-    import json
-    from decimal import Decimal
     
     # Test the trading database manager
     try:
